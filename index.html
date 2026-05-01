@@ -62,7 +62,7 @@
         </div>
 
         <!-- Chat Input -->
-        <div class="chat-input-container">
+        <div class="chat-input-container" id="chatInputContainer">
             <form id="chatForm">
                 <textarea id="chatInput" placeholder="پیام خود را بنویسید..." rows="1"></textarea>
                 <button type="submit" id="sendBtn">
@@ -78,6 +78,10 @@
         <div class="ad-content">
             <h3 style="color: var(--text-main); margin-bottom: 10px;">تماشای ویدیو الزامی است</h3>
             <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">برای ادامه گفتگو، لطفاً ویدیوی زیر را تا انتها تماشا کنید.</p>
+
+            <p style="font-size: 0.8rem; color: var(--text-main); margin-bottom: 12px; line-height: 1.5; font-weight: 700;">
+                نمایش تبلیغات جهت تأمین هزینه‌های سرور و رایگان ماندن سرویس برای شماست. از حمایت شما سپاسگزاریم.
+            </p>
 
             <!-- YouTube Video Slot -->
             <div id="ytplayerContainer" style="width: 100%; background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 15px; position: relative;">
@@ -102,9 +106,6 @@
                      data-full-width-responsive="true"></ins>
             </div>
 
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 15px; line-height: 1.4;">
-                نمایش تبلیغات جهت تأمین هزینه‌های سرور و رایگان ماندن سرویس برای شماست. از حمایت شما سپاسگزاریم.
-            </p>
 
             <button id="skipAdBtn" class="skip-btn" disabled>در حال بارگذاری ویدیو...</button>
         </div>

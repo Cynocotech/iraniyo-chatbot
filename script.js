@@ -52,15 +52,28 @@ if (!sessionId) {
 // User info handling
 let userInfo = JSON.parse(localStorage.getItem('n8n_chat_user'));
 
-if (userInfo && userInfo.name && userInfo.email) {
-    // User already registered, show chat
+const chatInputContainer = document.getElementById('chatInputContainer');
+const quickQuestionsWrapper = document.getElementById('quickQuestionsWrapper');
+
+function showChat() {
     preChatContainer.style.display = 'none';
     chatInterface.style.display = 'flex';
-    sendInitGreeting();
-} else {
-    // Show pre-chat form
+    chatInputContainer.style.display = 'block';
+    quickQuestionsWrapper.style.display = 'block';
+}
+
+function showPreChat() {
     preChatContainer.style.display = 'flex';
     chatInterface.style.display = 'none';
+    chatInputContainer.style.display = 'none';
+    quickQuestionsWrapper.style.display = 'none';
+}
+
+if (userInfo && userInfo.name && userInfo.email) {
+    showChat();
+    sendInitGreeting();
+} else {
+    showPreChat();
 }
 
 startChatForm.addEventListener('submit', (e) => {
@@ -71,10 +84,7 @@ startChatForm.addEventListener('submit', (e) => {
     if (name && email) {
         userInfo = { name, email };
         localStorage.setItem('n8n_chat_user', JSON.stringify(userInfo));
-
-        // Switch views
-        preChatContainer.style.display = 'none';
-        chatInterface.style.display = 'flex';
+        showChat();
         sendInitGreeting();
     }
 });
