@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>دستیار هوشمند ایرانیو</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="chat-container">
+
+        <!-- Header -->
+        <div class="chat-header">
+            <img src="https://panel.cybercina.co.uk//storage/logos/N0yQlVchcj4ucrQfVJwbXXB13FhWTMFccUBmWLpI.png" alt="Logo" class="header-logo">
+            <div class="header-info">
+                <h2>دستیار هوشمند ایرانیو</h2>
+                <span class="status"><span class="dot"></span> آنلاین</span>
+            </div>
+        </div>
+
+        <!-- Pre-Chat Form -->
+        <div class="pre-chat-container" id="preChatContainer">
+            <div class="pre-chat-content">
+                <img src="https://panel.cybercina.co.uk//storage/logos/N0yQlVchcj4ucrQfVJwbXXB13FhWTMFccUBmWLpI.png" alt="Logo" style="width: 120px; height: 120px; margin-bottom: 10px; object-fit: contain;">
+                <h3>خوش آمدید! 👋</h3>
+                <p>برای شروع گفتگو، لطفاً اطلاعات خود را وارد کنید.</p>
+                <form id="startChatForm">
+                    <div class="input-group">
+                        <i class="fa-solid fa-user"></i>
+                        <input type="text" id="userName" placeholder="نام و نام خانوادگی" required>
+                    </div>
+                    <div class="input-group">
+                        <i class="fa-solid fa-envelope"></i>
+                        <input type="email" id="userEmail" placeholder="ایمیل شما" required>
+                    </div>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 15px; line-height: 1.5; text-align: justify;">
+                        با استفاده از این دستیار، شما می‌پذیرید که جهت تأمین هزینه‌های سرور، پس از هر ۵ سوال یک تبلیغ مشاهده کنید. از حمایت شما سپاسگزاریم.
+                    </p>
+                    <button type="submit" class="start-btn">شروع گفتگو</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Chat Interface (Hidden initially) -->
+        <!-- NOTE: This div only wraps the message area. Quick questions & input are siblings of chat-container children, not nested inside chatInterface. -->
+        <div id="chatInterface" style="display: none;">
+            <div class="chat-messages" id="chatMessages"></div>
+        </div>
+
+        <!-- Quick Questions -->
+        <div class="quick-questions-wrapper" id="quickQuestionsWrapper">
+            <div class="quick-questions" id="quickQuestions">
+                <button class="quick-btn">شرایط ویزای تحصیلی چیست؟</button>
+                <button class="quick-btn">تغییرات مالیات ۲۰۲۶</button>
+                <button class="quick-btn">شرایط اقامت دائم (ILR)</button>
+                <button class="quick-btn">حقوق مستاجر چیست؟</button>
+            </div>
+        </div>
+
+        <!-- Chat Input -->
+        <div class="chat-input-container">
+            <form id="chatForm">
+                <textarea id="chatInput" placeholder="پیام خود را بنویسید..." rows="1"></textarea>
+                <button type="submit" id="sendBtn">
+                    <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </form>
+        </div>
+
+    </div><!-- End .chat-container -->
+
+    <!-- Ad Paywall Overlay -->
+    <div id="adOverlay" class="ad-overlay" style="display: none;">
+        <div class="ad-content">
+            <h3 style="color: var(--text-main); margin-bottom: 10px;">تماشای ویدیو الزامی است</h3>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">برای ادامه گفتگو، لطفاً ویدیوی زیر را تا انتها تماشا کنید.</p>
+
+            <!-- YouTube Video Slot -->
+            <div id="ytplayerContainer" style="width: 100%; background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 15px; position: relative;">
+                <div id="ytplayer" style="position: absolute; top: -50px; left: 0; width: 100%; height: calc(100% + 100px);"></div>
+                <!-- Interaction blocker (prevents clicking YouTube controls) -->
+                <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; cursor: default;"></div>
+                <!-- Facade: covers iframe to hide YouTube's play button; removed once video plays -->
+                <div id="ytFacade" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 15; background: #000; display: flex; justify-content: center; align-items: center; border-radius: 12px;">
+                    <div id="customPlayBtn" style="width: 68px; height: 68px; background: var(--primary); border-radius: 50%; display: flex; justify-content: center; align-items: center; cursor: pointer; box-shadow: 0 4px 20px rgba(97,42,128,0.6); transition: transform 0.15s;">
+                        <i class="fa-solid fa-play" style="color: white; font-size: 1.4rem; margin-right: -4px;"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Google AdSense Slot -->
+            <div class="ad-placeholder" style="height: 90px; margin: 10px 0;">
+                <ins class="adsbygoogle"
+                     style="display:block; width:100%; height:100%;"
+                     data-ad-client="ca-pub-کد_شما"
+                     data-ad-slot="کد_اسلات_شما"
+                     data-ad-format="auto"
+                     data-full-width-responsive="true"></ins>
+            </div>
+
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 15px; line-height: 1.4;">
+                نمایش تبلیغات جهت تأمین هزینه‌های سرور و رایگان ماندن سرویس برای شماست. از حمایت شما سپاسگزاریم.
+            </p>
+
+            <button id="skipAdBtn" class="skip-btn" disabled>در حال بارگذاری ویدیو...</button>
+        </div>
+    </div>
+
+    <!-- YouTube Iframe API -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <!-- Marked.js -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
