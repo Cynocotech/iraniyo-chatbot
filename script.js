@@ -32,15 +32,10 @@ marked.setOptions({
     gfm: true
 });
 
-// API Webhook configuration
-// For testing locally in n8n (requires you to click 'Execute Workflow'):
-const WEBHOOK_URL = 'https://agent.iraniyo.uk/webhook/a19aac9b-473e-4ad1-a220-4edd4f1025f4/chat';
+// C1 fix: all AI requests go through server-side proxy (real webhook URL never exposed)
+const WEBHOOK_URL = 'proxy.php';
 
-// Notification Sound
 const notificationSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3');
-
-// For production on your server (requires workflow to be Active):
-// const WEBHOOK_URL = 'https://agent.iraniyo.uk/webhook/a19aac9b-473e-4ad1-a220-4edd4f1025f4/chat';
 
 // Set up sessionId
 let sessionId = localStorage.getItem('n8n_chat_session');
@@ -84,6 +79,12 @@ startChatForm.addEventListener('submit', (e) => {
     if (name && email) {
         userInfo = { name, email };
         localStorage.setItem('n8n_chat_user', JSON.stringify(userInfo));
+        // Save lead to CSV server-side
+        fetch('save_user.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email })
+        }).catch(() => {});
         showChat();
         sendInitGreeting();
     }
@@ -133,7 +134,7 @@ async function sendInitGreeting() {
         }
 
         appendMessage(textResponse, 'bot');
-        notificationSound.play().catch(e => console.log('Audio play failed:', e));
+        notificationSound.play().catch(() => {});
     } catch (error) {
         typingIndicator.remove();
         console.error('Init greeting error:', error);
@@ -183,13 +184,10 @@ chatForm.addEventListener('submit', async (e) => {
         const countResp = await fetch('counter.php?action=increment');
         const countData = await countResp.json();
         currentCount = countData.count;
-        console.log("Current Question Count (Server):", currentCount);
     } catch (err) {
-        // Fallback to local storage if PHP is not available
         questionCount++;
         localStorage.setItem('n8n_chat_qcount', questionCount);
         currentCount = questionCount;
-        console.log("Current Question Count (Local Fallback):", currentCount);
     }
 
     if (currentCount >= 5) {
@@ -208,6 +206,7 @@ chatForm.addEventListener('submit', async (e) => {
 
     // Show typing indicator
     const typingIndicator = addTypingIndicator();
+    if (window.setNeuralSpeed) setNeuralSpeed(true);
     scrollToBottom();
 
     try {
@@ -227,6 +226,7 @@ chatForm.addEventListener('submit', async (e) => {
 
         // Remove typing indicator
         typingIndicator.remove();
+        if (window.setNeuralSpeed) setNeuralSpeed(false);
 
         if (!response.ok) {
             if (response.status === 404) {
@@ -264,9 +264,10 @@ chatForm.addEventListener('submit', async (e) => {
         appendMessage(textResponse, 'bot');
 
         // Play notification sound
-        notificationSound.play().catch(e => console.log('Audio play failed:', e));
+        notificationSound.play().catch(() => {});
     } catch (error) {
         typingIndicator.remove();
+        if (window.setNeuralSpeed) setNeuralSpeed(false);
         console.error('Error contacting n8n webhook:', error);
 
         let errorMsg = 'متاسفانه در ارتباط با سرور مشکلی پیش آمد. لطفا مجددا تلاش کنید.';
@@ -294,13 +295,9 @@ function appendMessage(text, sender) {
     contentDiv.classList.add('message-content');
 
     if (sender === 'bot') {
-        // N8n might send HTML with <b> and <a> tags as configured in the prompt
-        // Using marked parser but allowing basic HTML tags through
-        if (typeof marked !== 'undefined') {
-            contentDiv.innerHTML = marked.parse(text);
-        } else {
-            contentDiv.innerHTML = text.replace(/\\n/g, '<br>');
-        }
+        const raw = typeof marked !== 'undefined' ? marked.parse(text) : text.replace(/\n/g, '<br>');
+        // C4 fix: sanitize rendered HTML to prevent XSS
+        contentDiv.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
     } else {
         // User text is plain text, escape it properly
         contentDiv.textContent = text;
@@ -355,20 +352,16 @@ function getNextVideoId() {
     currentVideoIndex = (currentVideoIndex + 1) % YOUTUBE_VIDEOS.length;
     localStorage.setItem('n8n_chat_vid_idx', currentVideoIndex);
     
-    console.log("Selected Sequential Video ID:", id);
     return id;
 }
 
-// This function is called automatically by the YouTube Iframe API
-function onYouTubeIframeAPIReady() {
-    console.log("YouTube API Loaded. Player will initialize when needed.");
-}
+// Called automatically by the YouTube Iframe API
+function onYouTubeIframeAPIReady() {}
 
 function initYouTubePlayer() {
     if (ytPlayer) return; // Already initialized
     
     const videoId = getNextVideoId();
-    console.log("Initializing YouTube Player with ID:", videoId);
 
     ytPlayer = new YT.Player('ytplayer', {
         height: '100%',
@@ -395,9 +388,7 @@ function initYouTubePlayer() {
     });
 }
 
-function onPlayerReady(event) {
-    console.log("YouTube Player Ready");
-}
+function onPlayerReady(event) {}
 
 function onPlayerError(event) {
     console.error("YouTube Player Error:", event.data);
@@ -421,6 +412,8 @@ function onPlayerStateChange(event) {
     }
 }
 
+let resetToken = '';
+
 function showAdOverlay() {
     adOverlay.style.display = 'flex';
     document.getElementById('ytFacade').style.display = 'flex';
@@ -428,18 +421,18 @@ function showAdOverlay() {
     skipAdBtn.classList.remove('ready');
     skipAdBtn.textContent = 'لطفاً ویدیو را تا انتها تماشا کنید...';
     ytVideoEnded = false;
-
-    // Load Google Ad
-    try {
-        (adsbygoogle = window.adsbygoogle || []).push({});
-    } catch (e) { console.error("AdSense Error: ", e); }
+    resetToken = '';
+    // C2 fix: fetch a server-signed token required to reset the counter
+    fetch('counter.php?action=get_token')
+        .then(r => r.json())
+        .then(d => { resetToken = d.token || ''; })
+        .catch(() => {});
 
     // Initialize or Play the YouTube video
     if (!ytPlayer) {
         initYouTubePlayer();
     } else {
         const nextVideoId = getNextVideoId();
-        console.log("Switching to next sequential video:", nextVideoId);
         
         if (ytPlayer.loadVideoById) {
             ytPlayer.loadVideoById(nextVideoId);
@@ -466,9 +459,9 @@ skipAdBtn.addEventListener('click', async () => {
         ytPlayer.pauseVideo();
     }
 
-    // Reset counter on Server
+    // C2 fix: reset requires server-signed token
     try {
-        await fetch('counter.php?action=reset');
+        await fetch('counter.php?action=reset&token=' + encodeURIComponent(resetToken));
     } catch (e) { }
 
     questionCount = 0; // Reset local fallback counter
@@ -481,3 +474,86 @@ skipAdBtn.addEventListener('click', async () => {
         pendingMessage = '';
     }
 });
+
+// ── Neural Network Background ──────────────────────────
+(function () {
+    const canvas = document.getElementById('neuralCanvas');
+    const ctx = canvas.getContext('2d');
+    const NODE_COUNT = 80;
+    const MAX_DIST = 200;
+    const BASE_SPEED = 0.4;
+    let speedMultiplier = 1;
+    const nodes = [];
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    function rand(a, b) { return a + Math.random() * (b - a); }
+
+    for (let i = 0; i < NODE_COUNT; i++) {
+        const speed = rand(BASE_SPEED * 0.5, BASE_SPEED);
+        const angle = rand(0, Math.PI * 2);
+        nodes.push({
+            x: rand(0, window.innerWidth),
+            y: rand(0, window.innerHeight),
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            r: rand(1.5, 3)
+        });
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (let i = 0; i < nodes.length; i++) {
+            const a = nodes[i];
+            for (let j = i + 1; j < nodes.length; j++) {
+                const b = nodes[j];
+                const dx = a.x - b.x;
+                const dy = a.y - b.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < MAX_DIST) {
+                    const alpha = (1 - dist / MAX_DIST) * 0.9;
+                    ctx.beginPath();
+                    ctx.strokeStyle = `rgba(139, 92, 246, ${alpha})`;
+                    ctx.lineWidth = 0.7;
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        for (const n of nodes) {
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(167, 139, 250, 0.95)';
+            ctx.fill();
+
+            n.x += n.vx * speedMultiplier;
+            n.y += n.vy * speedMultiplier;
+            if (n.x < 0 || n.x > canvas.width)  n.vx *= -1;
+            if (n.y < 0 || n.y > canvas.height) n.vy *= -1;
+        }
+
+        requestAnimationFrame(draw);
+    }
+
+    window.setNeuralSpeed = function (fast) {
+        const target = fast ? 4 : 1;
+        const step = fast ? 0.15 : 0.08;
+        const interval = setInterval(() => {
+            speedMultiplier += (target - speedMultiplier) * step;
+            if (Math.abs(speedMultiplier - target) < 0.01) {
+                speedMultiplier = target;
+                clearInterval(interval);
+            }
+        }, 16);
+    };
+
+    resize();
+    window.addEventListener('resize', resize);
+    draw();
+})();

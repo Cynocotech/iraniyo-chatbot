@@ -1,8 +1,8 @@
 RewriteEngine On
 
-# Force SSL (HTTPS) - Commented out for debugging
-# RewriteCond %{HTTPS} off
-# RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+# H2 fix: Force HTTPS
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
 # 1. Remove .html extension from URLs
 RewriteCond %{REQUEST_FILENAME} !-d
@@ -12,3 +12,23 @@ RewriteRule ^(.*)$ $1.html [NC,L]
 # 2. Redirect /index.html to /
 RewriteCond %{THE_REQUEST} /index\.html [NC]
 RewriteRule ^(.*)index\.html$ /$1 [L,R=301]
+
+# L2 fix: Block direct access to sensitive data files
+<FilesMatch "^(ip_counts\.json|users\.csv|cors\.php)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Block access to any .json files directly
+<Files "*.json">
+    Order allow,deny
+    Deny from all
+</Files>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

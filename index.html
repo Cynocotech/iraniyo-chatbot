@@ -9,8 +9,12 @@
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="style.css">
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9144633233428520" crossorigin="anonymous"></script>
+    <!-- C4 fix: DOMPurify sanitizes bot HTML before rendering to prevent XSS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
+    <canvas id="neuralCanvas"></canvas>
     <div class="chat-container">
 
         <!-- Header -->
@@ -97,13 +101,9 @@
             </div>
 
             <!-- Google AdSense Slot -->
-            <div class="ad-placeholder" style="height: 90px; margin: 10px 0;">
-                <ins class="adsbygoogle"
-                     style="display:block; width:100%; height:100%;"
-                     data-ad-client="ca-pub-کد_شما"
-                     data-ad-slot="کد_اسلات_شما"
-                     data-ad-format="auto"
-                     data-full-width-responsive="true"></ins>
+            <div style="margin: 10px 0; height: 100px; background: rgba(255,255,255,0.05); border: 2px dashed rgba(255,255,255,0.15); border-radius: 12px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px;">
+                <i class="fa-solid fa-rectangle-ad" style="color: rgba(255,255,255,0.2); font-size: 1.4rem;"></i>
+                <span style="font-size: 0.75rem; color: rgba(255,255,255,0.2);">تبلیغات</span>
             </div>
 
 

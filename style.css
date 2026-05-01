@@ -38,6 +38,17 @@ body {
     width: 100%;
 }
 
+#neuralCanvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    opacity: 0.32;
+    pointer-events: none;
+}
+
 /* Background animated glow */
 body::before {
     content: '';
@@ -645,6 +656,7 @@ body::after {
         border: none !important;
         border-radius: 0 !important;
         transform: none !important;
+        background: rgba(8, 14, 26, 0.72) !important;
     }
 
     /* Compact header on mobile */
