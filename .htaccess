@@ -19,11 +19,11 @@ RewriteRule ^(.*)index\.html$ /$1 [L,R=301]
     Deny from all
 </FilesMatch>
 
-# Block access to any .json files directly
-<Files "*.json">
+# Block .json files except videos.json (which is intentionally public)
+<FilesMatch "^(?!videos\.json$).*\.json$">
     Order allow,deny
     Deny from all
-</Files>
+</FilesMatch>
 
 # Security headers
 <IfModule mod_headers.c>

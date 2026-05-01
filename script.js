@@ -1,11 +1,9 @@
-// ⬇️ CONFIGURATION: Add your unlimited YouTube links or IDs here ⬇️
-const YOUTUBE_VIDEOS = [
-    "https://youtu.be/bj1JRuyYeco?si=WIyH_J-NHum07p1E",
-    "https://youtu.be/BI0cTPdsGAE?si=2bWRVIzLiBF2wdlu",
-    "https://youtu.be/2mRycClopmA?si=5p3_7BKyvOD-xWuJ",
-
-
-];
+// YouTube links loaded from videos.json at runtime
+let YOUTUBE_VIDEOS = [];
+fetch('videos.json')
+    .then(r => r.json())
+    .then(d => { YOUTUBE_VIDEOS = d.videos || []; })
+    .catch(() => {});
 
 const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
@@ -345,6 +343,7 @@ function getYouTubeID(url) {
 let currentVideoIndex = parseInt(localStorage.getItem('n8n_chat_vid_idx') || '0');
 
 function getNextVideoId() {
+    if (!YOUTUBE_VIDEOS.length) return null;
     const link = YOUTUBE_VIDEOS[currentVideoIndex];
     const id = getYouTubeID(link);
     
@@ -359,9 +358,9 @@ function getNextVideoId() {
 function onYouTubeIframeAPIReady() {}
 
 function initYouTubePlayer() {
-    if (ytPlayer) return; // Already initialized
-    
+    if (ytPlayer) return;
     const videoId = getNextVideoId();
+    if (!videoId) return;
 
     ytPlayer = new YT.Player('ytplayer', {
         height: '100%',
