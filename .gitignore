@@ -13,3 +13,4 @@ __pycache__/
 # Generated / local-only data
 .agents.cache.json
 users.csv
+.counter_secret

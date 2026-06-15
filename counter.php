@@ -4,8 +4,22 @@ header('Content-Type: application/json');
 require_once __DIR__ . '/cors.php';
 checkCors('GET');
 
-// C2 fix: secret used to sign reset tokens (change this to a random string)
-define('RESET_SECRET', getenv('IRANIYO_COUNTER_RESET_SECRET') ?: 'a509ad6520aa5df5a49dd421a72fbecd0892dfd1e91efbd7430b38df58f985e6');
+// C2 fix: secret used to sign reset tokens. Set IRANIYO_COUNTER_RESET_SECRET to
+// pin it across deploys; otherwise a random secret is generated once and
+// stored alongside this file (not committed to git).
+function loadResetSecret(): string {
+    $envSecret = getenv('IRANIYO_COUNTER_RESET_SECRET');
+    if ($envSecret) {
+        return $envSecret;
+    }
+    $secretFile = __DIR__ . '/.counter_secret';
+    if (!is_file($secretFile)) {
+        file_put_contents($secretFile, bin2hex(random_bytes(32)), LOCK_EX);
+        chmod($secretFile, 0600);
+    }
+    return trim(file_get_contents($secretFile));
+}
+define('RESET_SECRET', loadResetSecret());
 
 // H3 fix: real IP detection through Cloudflare / proxies
 function getClientIP() {
