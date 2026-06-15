@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>برنامه‌ریز سفر</title>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--s1:#161b26;--s2:#1c2236;--s3:#232940;
+  --acc:#5b9cf6;--gold:#f5c518;--grn:#3dd68c;--red:#f87171;
+  --txt:#eef2ff;--sub:#8492b4;--bdr:#252d42;
+  --r:14px;--font:'Vazirmatn',Tahoma,sans-serif;
+}
+html,body{height:100%;width:100%;background:var(--bg);color:var(--txt);font-family:var(--font);overflow:hidden}
+
+/* ── HEADER ── */
+#hdr{
+  position:fixed;top:0;left:0;right:0;height:54px;
+  background:var(--s1);border-bottom:1px solid var(--bdr);
+  display:flex;align-items:center;gap:10px;padding:0 14px;z-index:200;
+}
+#hdr a{color:var(--sub);font-size:18px;text-decoration:none;padding:4px 8px}
+#hdr-title{flex:1}
+#hdr-title h1{font-size:15px;font-weight:700}
+#hdr-title p{font-size:10px;color:var(--acc);margin-top:1px}
+.dot{width:6px;height:6px;background:var(--grn);border-radius:50%;display:inline-block;margin-left:5px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+#resetBtn{background:none;border:1px solid var(--bdr);color:var(--sub);border-radius:8px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)}
+#resetBtn:hover{border-color:var(--red);color:var(--red)}
+
+
+
+/* ── PANELS ── */
+#chatP{
+  position:fixed;top:54px;left:0;right:0;bottom:0;
+  display:flex;flex-direction:column;
+}
+
+/* ── CHAT ── */
+#msgs{flex:1;overflow-y:auto;padding:14px 12px 8px;display:flex;flex-direction:column;gap:10px}
+#msgs::-webkit-scrollbar{width:3px}
+#msgs::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
+
+.msg{display:flex;gap:8px;max-width:90%}
+.msg.user{align-self:flex-end;flex-direction:row-reverse}
+.msg.bot{align-self:flex-start}
+.av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;margin-top:2px}
+.msg.user .av{background:var(--acc)}
+.msg.bot .av{background:linear-gradient(135deg,#5b9cf6,#3dd68c)}
+.bbl{padding:10px 13px;border-radius:13px;font-size:13.5px;line-height:1.75;word-break:break-word}
+.msg.user .bbl{background:var(--acc);border-bottom-left-radius:3px}
+.msg.bot .bbl{background:var(--s2);border:1px solid var(--bdr);border-bottom-right-radius:3px}
+.bbl b{color:#a8c4ff}.bbl a{color:var(--grn);text-decoration:none}
+.ts{font-size:10px;color:var(--sub);margin-top:3px;text-align:right}
+.msg.user .ts{text-align:left}
+
+/* typing */
+.typ-dots{display:flex;gap:4px;padding:10px 13px}
+.td{width:5px;height:5px;background:var(--sub);border-radius:50%;animation:bn .9s infinite}
+.td:nth-child(2){animation-delay:.15s}.td:nth-child(3){animation-delay:.3s}
+@keyframes bn{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}
+
+/* welcome */
+.welc{text-align:center;padding:24px 16px}
+.welc .wi{font-size:42px;margin-bottom:8px}
+.welc h2{font-size:17px;font-weight:700;margin-bottom:6px}
+.welc p{font-size:13px;line-height:1.8;color:var(--sub);max-width:300px;margin:0 auto 16px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.chip{
+  background:var(--s2);border:1px solid var(--bdr);border-radius:20px;
+  padding:6px 12px;font-size:12px;cursor:pointer;font-family:var(--font);color:var(--txt);
+  transition:all .2s;
+}
+.chip:hover,.chip:active{border-color:var(--acc);background:var(--s3);color:var(--acc)}
+
+/* input */
+#ibar{
+  flex-shrink:0;height:60px;background:var(--s1);border-top:1px solid var(--bdr);
+  display:flex;align-items:center;gap:8px;padding:0 12px;
+}
+#uinp{
+  flex:1;background:var(--s2);border:1px solid var(--bdr);border-radius:22px;
+  color:var(--txt);font-family:var(--font);font-size:14px;padding:9px 15px;
+  resize:none;outline:none;line-height:1.5;max-height:80px;
+}
+#uinp:focus{border-color:var(--acc)}
+#uinp::placeholder{color:var(--sub)}
+#sbtn{
+  width:42px;height:42px;flex-shrink:0;background:var(--acc);border:none;
+  border-radius:50%;color:#fff;cursor:pointer;font-size:16px;transition:opacity .2s;
+}
+#sbtn:disabled{opacity:.35;cursor:default}
+
+/* ── PLAN ── */
+#dayTabs{
+  flex-shrink:0;height:46px;background:var(--s1);border-bottom:1px solid var(--bdr);
+  display:flex;align-items:center;gap:5px;padding:0 12px;overflow-x:auto;
+}
+#dayTabs::-webkit-scrollbar{display:none}
+.dtab{
+  flex-shrink:0;padding:5px 12px;border-radius:18px;
+  border:1px solid var(--bdr);background:none;color:var(--sub);
+  font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+}
+.dtab.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+#planC{flex:1;overflow-y:auto;padding:12px}
+#planC::-webkit-scrollbar{width:3px}
+#planC::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
+
+/* destination hero */
+.dest-hero{
+  position:relative;border-radius:var(--r);overflow:hidden;
+  height:160px;margin-bottom:12px;background:var(--s2);
+}
+.dest-hero img{width:100%;height:100%;object-fit:cover;opacity:.7}
+.dest-hero-overlay{
+  position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(0,0,0,.8) 0%,transparent 60%);
+  display:flex;flex-direction:column;justify-content:flex-end;padding:14px;
+}
+.dest-hero-overlay h2{font-size:18px;font-weight:700}
+.dest-hero-overlay p{font-size:12px;color:rgba(255,255,255,.7);margin-top:3px}
+
+/* activity card — mindtrip style */
+.act-card{
+  background:var(--s2);border:1px solid var(--bdr);border-radius:13px;
+  margin-bottom:9px;overflow:hidden;display:flex;transition:border-color .2s;
+}
+.act-card:hover{border-color:var(--acc)}
+.act-img{width:88px;flex-shrink:0;background:var(--s3);position:relative;overflow:hidden}
+.act-img img{width:100%;height:100%;object-fit:cover}
+.act-img .no-img{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:24px}
+.act-body{flex:1;padding:11px 12px;min-width:0}
+.act-top{display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:4px}
+.act-name{font-size:13px;font-weight:600;line-height:1.3}
+.act-name a{color:var(--txt);text-decoration:none}
+.act-name a:hover{color:var(--acc)}
+.act-time-badge{flex-shrink:0;font-size:10px;font-weight:700;color:var(--acc);background:rgba(91,156,246,.12);padding:2px 7px;border-radius:5px}
+.act-desc{font-size:11.5px;color:var(--sub);line-height:1.6;margin-top:3px}
+.act-tags{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+.tag{font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px}
+.tag-food{background:rgba(245,197,24,.1);color:var(--gold)}
+.tag-sight{background:rgba(91,156,246,.1);color:var(--acc)}
+.tag-nature{background:rgba(61,214,140,.1);color:var(--grn)}
+
+/* trip header */
+.trip-hdr{
+  background:linear-gradient(135deg,#0f1e3a,#0f2a1e);
+  border:1px solid #1e3a5a;border-radius:var(--r);padding:14px;margin-bottom:10px;
+}
+.trip-hdr h2{font-size:15px;font-weight:700;margin-bottom:5px}
+.trip-hdr .bdg{font-size:12px;color:var(--gold)}
+
+/* tips */
+.tips-card{background:var(--s3);border:1px solid var(--bdr);border-radius:13px;padding:13px;margin-bottom:9px}
+.tips-card h3{font-size:13px;font-weight:700;color:var(--gold);margin-bottom:9px}
+.tips-card li{font-size:12px;color:var(--sub);line-height:1.7;list-style:none;padding-right:14px;position:relative;margin-bottom:5px}
+.tips-card li::before{content:'•';position:absolute;right:0;color:var(--gold)}
+
+/* plan empty */
+.pempty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--sub);text-align:center;gap:10px}
+.pempty .ei{font-size:36px}
+.pempty p{font-size:13px;max-width:220px;line-height:1.7}
+
+/* ── MAP ── */
+#mapP{background:var(--s1)}
+#mapFrame{flex:1;width:100%;border:none}
+.map-list{flex-shrink:0;max-height:220px;overflow-y:auto;padding:10px 12px;border-top:1px solid var(--bdr)}
+.map-list::-webkit-scrollbar{width:3px}
+.map-list::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
+.mlink{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:9px;margin-bottom:6px;text-decoration:none;color:var(--txt);background:var(--s2);border:1px solid var(--bdr);font-size:12.5px;transition:border-color .2s}
+.mlink:hover{border-color:var(--grn);color:var(--grn)}
+.mlink .mn{font-size:10px;color:var(--sub);width:16px;flex-shrink:0}
+.map-empty{color:var(--sub);font-size:13px;text-align:center;padding:20px}
+</style>
+</head>
+<body>
+
+<div id="hdr">
+  <a href="/">←</a>
+  <div id="hdr-title">
+    <h1>برنامه‌ریز سفر <span class="dot"></span> <span style="font-size:9px;font-weight:700;background:#f59e0b;color:#0f1117;padding:2px 6px;border-radius:5px;vertical-align:middle;letter-spacing:.04em">نسخه آزمایشی</span></h1>
+    <p id="subtitle">ایرانیانو</p>
+  </div>
+  <button id="resetBtn" onclick="doReset()">🔄 شروع مجدد</button>
+</div>
+
+
+
+<!-- CHAT -->
+<div id="chatP" class="on">
+  <div id="msgs">
+    <div class="welc" id="welc">
+      <div class="wi">✈️</div>
+      <h2>برنامه‌ریز سفر ایرانیانو</h2>
+      <p>چند سوال کوتاه می‌پرسم و بعد یک برنامهٔ کامل روزبه‌روز با تصویر و نقشه برایت می‌سازم.</p>
+      <div class="chips">
+        <div class="chip" onclick="sendChip(this)">🗺️ استانبول</div>
+        <div class="chip" onclick="sendChip(this)">🌍 دبی</div>
+        <div class="chip" onclick="sendChip(this)">🎌 توکیو</div>
+        <div class="chip" onclick="sendChip(this)">🏰 رم</div>
+        <div class="chip" onclick="sendChip(this)">🏖️ آنتالیا</div>
+        <div class="chip" onclick="sendChip(this)">🇬🇧 لندن</div>
+      </div>
+    </div>
+  </div>
+  <div id="ibar">
+    <textarea id="uinp" rows="1" placeholder="پیام بنویسید…" onkeydown="hkey(event)" oninput="grow(this)"></textarea>
+    <button id="sbtn" onclick="send()">➤</button>
+  </div>
+</div>
+
+
+
+
+
+<script>
+const SLUG   = 'trip-planner';
+const SK     = 'dryas_session_'+SLUG;
+const HK     = 'dryas_history_'+SLUG;
+const PK     = 'dryas_plan_'+SLUG;
+const EXP    = 5*86400000;
+const MAXM   = 60;
+
+let sid=localStorage.getItem(SK)||'';
+let busy=false,ghist=[],plan=null;
+
+// ── TABS (simplified — only chat for now) ────────────────
+function goTab(t){ if(t==='chat') scrollB(); }
+
+// ── STORAGE ───────────────────────────────────────────────
+function loadM(){
+  try{
+    const r=JSON.parse(localStorage.getItem(HK)||'null');
+    if(!r)return[];
+    if(r.ts&&Date.now()-r.ts>EXP){wipe();return[];}
+    return r.messages||[];
+  }catch{return[];}
+}
+function saveM(m){
+  if(m.length>MAXM)m=m.slice(-MAXM);
+  localStorage.setItem(HK,JSON.stringify({ts:Date.now(),messages:m}));
+}
+function push(role,html,ts){
+  const m=loadM();m.push({role,html,ts});saveM(m);
+  ghist=toG(m);
+}
+function wipe(){
+  [HK,SK,PK].forEach(k=>localStorage.removeItem(k));
+  sid='';ghist=[];plan=null;
+}
+function toG(stored){
+  return stored.filter(m=>m.role==='user'||m.role==='bot').map(m=>({
+    role:m.role==='bot'?'assistant':'user',
+    content:m.role==='user'
+      ?(m.html||'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+      :(m.html||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()
+  }));
+}
+
+// ── SCROLL ────────────────────────────────────────────────
+function scrollB(){
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const el=document.getElementById('msgs');
+    if(el)el.scrollTop=el.scrollHeight;
+  }));
+}
+
+// ── MESSAGES ─────────────────────────────────────────────
+function now(){return new Date().toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'})}
+function renderM(role,html,ts){
+  const el=document.getElementById('msgs');
+  const d=document.createElement('div');
+  d.className='msg '+role;
+  d.innerHTML=`<div class="av">${role==='user'?'👤':'✈️'}</div><div><div class="bbl">${html}</div><div class="ts">${ts||now()}</div></div>`;
+  el.appendChild(d);
+}
+function upgradeRouteLink(html){
+  return html.replace(
+    /<b>🧭[^<]*<\/b>\s*\n?\s*<a\s[^>]*href="(https:\/\/www\.google\.com\/maps\/dir\/[^"]+)"[^>]*>([^<]+)<\/a>/gu,
+    function(_m,url,label){
+      var c=(url.match(/%7C/g)||[]).length+2;
+      return '<a class="route-btn" href="'+url+'" target="_blank">🧭 '+label.trim()+' &middot; '+c+' مکان</a>';
+    }
+  );
+}
+function addM(role,html,ts,save=true){
+  const w=document.getElementById('welc');if(w)w.remove();
+  const t=ts||now();
+  const out=role==='bot'?upgradeRouteLink(html):html;
+  renderM(role,out,t);scrollB();
+  if(save)push(role,out,t);
+  if(role==='bot')tryParse(out);
+}
+function restore(){
+  const m=loadM();if(!m.length)return;
+  const w=document.getElementById('welc');if(w)w.remove();
+  m.forEach(msg=>renderM(msg.role,msg.html,msg.ts));
+  ghist=toG(m);scrollB();
+  const sp=localStorage.getItem(PK);
+  if(sp){try{plan=JSON.parse(sp);renderPlan();}catch{}}
+}
+
+// ── TYPING ────────────────────────────────────────────────
+function showT(){
+  const el=document.getElementById('msgs');
+  const d=document.createElement('div');d.className='msg bot';d.id='typ';
+  d.innerHTML='<div class="av">✈️</div><div class="bbl typ-dots"><div class="td"></div><div class="td"></div><div class="td"></div></div>';
+  el.appendChild(d);scrollB();
+}
+function hideT(){const t=document.getElementById('typ');if(t)t.remove();}
+
+// ── SEND ─────────────────────────────────────────────────
+async function send(){
+  if(busy)return;
+  const inp=document.getElementById('uinp');
+  const msg=inp.value.trim();if(!msg)return;
+  inp.value='';grow(inp);
+  addM('user',esc(msg));showT();
+  document.getElementById('sbtn').disabled=true;busy=true;
+  try{
+    const r=await fetch('/chat',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg,session_id:sid||undefined,agent_slug:SLUG,client_history:[...ghist]})
+    });
+    const data=await r.json();hideT();
+    if(!r.ok)throw new Error(data.detail||'خطا');
+    if(data.session_id){sid=data.session_id;localStorage.setItem(SK,sid);}
+    addM('bot',data.answer);
+  }catch(e){hideT();addM('bot','⚠️ '+e.message,null,false);}
+  finally{busy=false;document.getElementById('sbtn').disabled=false;inp.focus();}
+}
+
+// ── PARSE PLAN ────────────────────────────────────────────
+function tryParse(html){
+  if(!html.includes('روز ۱')&&!html.includes('روز 1'))return;
+  const p={title:'',budget:'',dest:'',days:[],tips:[],allPlaces:[]};
+
+  const tm=html.match(/<b>✈️\s*([^<]+)<\/b>/);
+  if(tm)p.title=tm[1].trim();
+  const bm=html.match(/برآورد بودجه[^:]*:\s*<\/b>\s*([^<\n]+)/);
+  if(bm)p.budget=bm[1].trim();
+
+  // Extract destination from title
+  const dm2=p.title.match(/به\s+([^\s:،]+)/);
+  if(dm2)p.dest=dm2[1];
+
+  const dr=/<b>🗓️[^<]*روز\s*(\d+)[^<]*—\s*([^<]+)<\/b>([\s\S]*?)(?=<b>🗓️|<b>💡|<b>🗺️|$)/g;
+  let dm;
+  while((dm=dr.exec(html))!==null){
+    const acts=[];
+    const ar=/•\s*<b>(\d+:\d+)<\/b>\s*—\s*(?:<a[^>]+href="([^"]*)"[^>]*>([^<]+)<\/a>|([^—\n<]+))\s*(?:—\s*)?([^\n•<]*)/g;
+    let am;
+    while((am=ar.exec(dm[3]))!==null){
+      const name=(am[3]||am[4]||'').trim();
+      const url=am[2]||'';
+      const desc=(am[5]||'').replace(/<[^>]+>/g,'').trim();
+      if(name){acts.push({time:am[1],name,url,desc});p.allPlaces.push({name,url});}
+    }
+    p.days.push({num:dm[1],title:dm[2].trim(),acts});
+  }
+
+  const tpm=html.match(/<b>💡[^<]*<\/b>([\s\S]*?)(?=<b>🗺️|$)/);
+  if(tpm){let tr=/•\s*([^\n•<]+)/g,t;while((t=tr.exec(tpm[1]))!==null){const s=t[1].replace(/<[^>]+>/g,'').trim();if(s)p.tips.push(s);}}
+
+  if(p.days.length>0){
+    plan=p;
+    localStorage.setItem(PK,JSON.stringify(p));
+    if(p.title)document.getElementById('subtitle').textContent=p.title;
+    renderPlan();
+  }
+}
+
+// ── RENDER PLAN ───────────────────────────────────────────
+function renderPlan(){
+  if(!plan)return;
+  const tabs=document.getElementById('dayTabs');tabs.innerHTML='';
+  const all=[...plan.days];
+  if(plan.tips.length)all.push({num:'tips',title:'💡 نکات'});
+
+  all.forEach((d,i)=>{
+    const b=document.createElement('button');b.className='dtab'+(i===0?' on':'');
+    b.textContent=d.num==='tips'?'💡 نکات':`روز ${d.num}`;
+    b.onclick=()=>{document.querySelectorAll('.dtab').forEach(t=>t.classList.remove('on'));b.classList.add('on');showDay(d.num);};
+    tabs.appendChild(b);
+  });
+  showDay(plan.days[0]?.num||'tips');
+}
+
+// Unsplash image for a place name
+function imgUrl(name,dest){
+  // Use Unsplash source with place+dest keywords — no API key needed
+  const q=encodeURIComponent((name+' '+dest).slice(0,40));
+  return`https://source.unsplash.com/88x88/?${q},travel`;
+}
+
+function showDay(num){
+  const c=document.getElementById('planC');c.innerHTML='';
+  if(num==='tips'){
+    if(plan.title||plan.budget){
+      const h=document.createElement('div');h.className='trip-hdr';
+      h.innerHTML=(plan.title?`<h2>✈️ ${x(plan.title)}</h2>`:'')+
+        (plan.budget?`<div class="bdg">💰 ${x(plan.budget)}</div>`:'');
+      c.appendChild(h);
+    }
+    if(plan.tips.length){
+      const t=document.createElement('div');t.className='tips-card';
+      t.innerHTML=`<h3>💡 نکات سفر</h3><ul>${plan.tips.map(tip=>`<li>${x(tip)}</li>`).join('')}</ul>`;
+      c.appendChild(t);
+    }
+    return;
+  }
+  const day=plan.days.find(d=>String(d.num)===String(num));
+  if(!day)return;
+
+  // Day hero image
+  const hero=document.createElement('div');hero.className='dest-hero';
+  const hq=encodeURIComponent((day.title+' '+plan.dest+' travel').slice(0,50));
+  hero.innerHTML=`
+    <img src="https://source.unsplash.com/400x160/?${hq}" alt="${x(day.title)}" loading="lazy" onerror="this.style.display='none'">
+    <div class="dest-hero-overlay">
+      <h2>روز ${x(day.num)} — ${x(day.title)}</h2>
+      <p>${day.acts.length} فعالیت</p>
+    </div>`;
+  c.appendChild(hero);
+
+  day.acts.forEach(a=>{
+    const card=document.createElement('div');card.className='act-card';
+    const isFood=/ناهار|صبح|شام|رستوران|کافه|غذا|cafe|restaurant/i.test(a.name+a.desc);
+    const isNature=/ساحل|پارک|طبیعت|کوه|دریا|beach|park|nature/i.test(a.name+a.desc);
+    const tagClass=isFood?'tag-food':isNature?'tag-nature':'tag-sight';
+    const tagLabel=isFood?'🍽️ غذا':isNature?'🌿 طبیعت':'📍 مکان';
+    const iq=encodeURIComponent((a.name+' '+plan.dest).slice(0,40));
+    card.innerHTML=`
+      <div class="act-img">
+        <img src="https://source.unsplash.com/88x110/?${iq},travel" alt="${x(a.name)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'no-img\\'>${isFood?'🍽️':isNature?'🌿':'📍'}</div>'">
+      </div>
+      <div class="act-body">
+        <div class="act-top">
+          <div class="act-name">${a.url?`<a href="${a.url}" target="_blank">📍 ${x(a.name)}</a>`:`<span>${x(a.name)}</span>`}</div>
+          <div class="act-time-badge">${x(a.time)}</div>
+        </div>
+        ${a.desc?`<div class="act-desc">${x(a.desc)}</div>`:''}
+        <div class="act-tags"><span class="tag ${tagClass}">${tagLabel}</span></div>
+      </div>`;
+    c.appendChild(card);
+  });
+}
+
+// ── MAP ───────────────────────────────────────────────────
+function buildMap(){
+  if(!plan||!plan.allPlaces.length){
+    document.getElementById('mapList').innerHTML='<div class="map-empty">پس از تولید برنامه، مکان‌ها اینجا نمایش داده می‌شوند.</div>';
+    return;
+  }
+  // Embed first place in Google Maps iframe
+  const first=plan.allPlaces[0];
+  const mq=encodeURIComponent(first.name+(plan.dest?' '+plan.dest:''));
+  document.getElementById('mapFrame').src=`https://maps.google.com/maps?q=${mq}&output=embed&hl=fa`;
+
+  // Build clickable list
+  const list=document.getElementById('mapList');
+  list.innerHTML='';
+  plan.allPlaces.forEach((p2,i)=>{
+    const a=document.createElement('a');a.className='mlink';
+    a.href=p2.url||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p2.name)}`;
+    a.target='_blank';
+    a.innerHTML=`<span class="mn">${i+1}</span><span>📍</span>${x(p2.name)}`;
+    list.appendChild(a);
+  });
+}
+
+// ── RESET ─────────────────────────────────────────────────
+function doReset(){
+  if(!confirm('گفتگو را از ابتدا شروع کنیم؟'))return;
+  wipe();
+  document.getElementById('msgs').innerHTML=`
+    <div class="welc" id="welc">
+      <div class="wi">✈️</div><h2>برنامه‌ریز سفر ایرانیانو</h2>
+      <p>چند سوال کوتاه می‌پرسم و بعد یک برنامهٔ کامل روزبه‌روز با تصویر و نقشه برایت می‌سازم.</p>
+      <div class="chips">
+        <div class="chip" onclick="sendChip(this)">🗺️ استانبول</div>
+        <div class="chip" onclick="sendChip(this)">🌍 دبی</div>
+        <div class="chip" onclick="sendChip(this)">🎌 توکیو</div>
+        <div class="chip" onclick="sendChip(this)">🏰 رم</div>
+        <div class="chip" onclick="sendChip(this)">🏖️ آنتالیا</div>
+        <div class="chip" onclick="sendChip(this)">🇬🇧 لندن</div>
+      </div>
+    </div>`;
+  document.getElementById('subtitle').textContent='ایرانیانو';
+  goTab('chat');
+}
+
+// ── HELPERS ───────────────────────────────────────────────
+function sendChip(el){const t=el.textContent.replace(/^[\p{Emoji}\s]+/u,'').trim()||el.textContent.trim();document.getElementById('uinp').value=t;send();}
+function hkey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
+function grow(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,80)+'px';}
+function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function x(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ── INIT ─────────────────────────────────────────────────
+restore();
+</script>
+</body>
+</html>

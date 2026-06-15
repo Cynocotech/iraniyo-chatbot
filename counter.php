@@ -5,7 +5,7 @@ require_once __DIR__ . '/cors.php';
 checkCors('GET');
 
 // C2 fix: secret used to sign reset tokens (change this to a random string)
-define('RESET_SECRET', 'a509ad6520aa5df5a49dd421a72fbecd0892dfd1e91efbd7430b38df58f985e6');
+define('RESET_SECRET', getenv('IRANIYO_COUNTER_RESET_SECRET') ?: 'a509ad6520aa5df5a49dd421a72fbecd0892dfd1e91efbd7430b38df58f985e6');
 
 // H3 fix: real IP detection through Cloudflare / proxies
 function getClientIP() {
@@ -35,60 +35,72 @@ function verifyToken($ip, $token) {
         || hash_equals(hash_hmac('sha256', $ip . '|' . ($window - 1), RESET_SECRET), $token);
 }
 
-$file   = __DIR__ . '/ip_counts.json';
 $ip     = getClientIP();
 $action = isset($_GET['action']) ? $_GET['action'] : 'increment';
 
-// C3 fix: file locking prevents race conditions
-$fp = fopen($file, 'c+');
-if (!$fp) {
-    http_response_code(500);
-    echo json_encode(['error' => 'Server error']);
-    exit;
-}
-flock($fp, LOCK_EX);
-
-$content = stream_get_contents($fp);
-$data    = $content ? json_decode($content, true) : [];
-if (!is_array($data)) $data = [];
-
 if ($action === 'get_token') {
     // Issue a signed reset token for this IP
-    flock($fp, LOCK_UN);
-    fclose($fp);
     echo json_encode(['token' => generateToken($ip)]);
     exit;
+}
 
-} elseif ($action === 'reset') {
+$dbUrl = getenv('POSTGRES_DSN');
+if (!$dbUrl) {
+    http_response_code(500);
+    echo json_encode(['error' => 'POSTGRES_DSN not configured']);
+    exit;
+}
+
+$dbopts = parse_url($dbUrl);
+if (!$dbopts) {
+    http_response_code(500);
+    echo json_encode(['error' => 'Invalid POSTGRES_DSN']);
+    exit;
+}
+
+$dsn = 'pgsql:host=' . ($dbopts['host'] ?? '127.0.0.1') . ';port=' . ($dbopts['port'] ?? 5432) . ';dbname=' . ltrim($dbopts['path'] ?? '', '/');
+try {
+    $pdo = new PDO($dsn, $dbopts['user'] ?? null, $dbopts['pass'] ?? null, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+    ]);
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ip_counts (
+        ip VARCHAR(45) PRIMARY KEY,
+        count INTEGER NOT NULL DEFAULT 0
+    )");
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode(['error' => 'Database connection failed']);
+    exit;
+}
+
+$count = 0;
+
+if ($action === 'reset') {
     // C2 fix: require valid token before resetting
     $token = isset($_GET['token']) ? $_GET['token'] : '';
     if (!$token || !verifyToken($ip, $token)) {
-        flock($fp, LOCK_UN);
-        fclose($fp);
         http_response_code(403);
         echo json_encode(['error' => 'Invalid token']);
         exit;
     }
-    $data[$ip] = 0;
+    $stmt = $pdo->prepare("UPDATE ip_counts SET count = 0 WHERE ip = ?");
+    $stmt->execute([$ip]);
+    $count = 0;
 
 } elseif ($action === 'check') {
-    // Read only, no write needed
-    flock($fp, LOCK_UN);
-    fclose($fp);
-    echo json_encode(['count' => isset($data[$ip]) ? (int)$data[$ip] : 0]);
-    exit;
+    $stmt = $pdo->prepare("SELECT count FROM ip_counts WHERE ip = ?");
+    $stmt->execute([$ip]);
+    $row = $stmt->fetch();
+    $count = $row ? (int)$row['count'] : 0;
 
 } else {
     // Default: increment
-    $data[$ip] = isset($data[$ip]) ? (int)$data[$ip] + 1 : 1;
+    $stmt = $pdo->prepare("INSERT INTO ip_counts (ip, count) VALUES (?, 1) ON CONFLICT (ip) DO UPDATE SET count = ip_counts.count + 1 RETURNING count");
+    $stmt->execute([$ip]);
+    $count = (int)$stmt->fetchColumn();
 }
 
-// Write back with lock still held
-ftruncate($fp, 0);
-rewind($fp);
-fwrite($fp, json_encode($data));
-flock($fp, LOCK_UN);
-fclose($fp);
-
 // M2 fix: do NOT return the IP in the response
-echo json_encode(['count' => (int)$data[$ip]]);
+echo json_encode(['count' => $count]);

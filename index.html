@@ -87,6 +87,25 @@
             </div>
         </div>
 
+        <!-- Agent Switcher -->
+        <div class="agent-tabs" id="agentTabs">
+            <button class="agent-tab active" data-agent="dr-yas" type="button">
+                <span class="agent-tab-icon">⚖️</span><span class="agent-tab-label">دکتر یاس</span>
+            </button>
+            <button class="agent-tab" data-agent="trip-planner" type="button">
+                <span class="agent-tab-icon">✈️</span><span class="agent-tab-label">برنامه‌ریز سفر</span>
+            </button>
+            <button class="voice-toggle-btn" id="voiceToggleBtn" type="button" title="پاسخ صوتی دستیار">
+                <i class="fa-solid fa-volume-high"></i>
+            </button>
+            <button class="end-chat-btn" id="endChatBtn" type="button" title="پایان گفتگو و ارسال خلاصه به ایمیل">
+                <i class="fa-solid fa-envelope-circle-check"></i>
+            </button>
+            <button class="agent-reset-btn" id="agentResetBtn" type="button" title="شروع مجدد گفتگو">
+                <i class="fa-solid fa-rotate-right"></i>
+            </button>
+        </div>
+
         <!-- Pre-Chat Form -->
         <div class="pre-chat-container" id="preChatContainer">
             <div class="pre-chat-content">
@@ -102,8 +121,8 @@
                         <i class="fa-solid fa-envelope"></i>
                         <input type="email" id="userEmail" placeholder="ایمیل شما" required>
                     </div>
-                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 15px; line-height: 1.5; text-align: justify;">
-                        با استفاده از این دستیار، شما می‌پذیرید که جهت تأمین هزینه‌های سرور، پس از هر ۵ سوال یک تبلیغ مشاهده کنید. از حمایت شما سپاسگزاریم.
+                    <p id="adThresholdNotice" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 15px; line-height: 1.5; text-align: justify;">
+                        با استفاده از این دستیار، شما می‌پذیرید که جهت تأمین هزینه‌های سرور، پس از چند سوال یک تبلیغ مشاهده کنید. از حمایت شما سپاسگزاریم.
                     </p>
                     <button type="submit" class="start-btn">شروع گفتگو</button>
                 </form>
@@ -118,18 +137,16 @@
 
         <!-- Quick Questions -->
         <div class="quick-questions-wrapper" id="quickQuestionsWrapper">
-            <div class="quick-questions" id="quickQuestions">
-                <button class="quick-btn">شرایط ویزای تحصیلی چیست؟</button>
-                <button class="quick-btn">تغییرات مالیات ۲۰۲۶</button>
-                <button class="quick-btn">شرایط اقامت دائم (ILR)</button>
-                <button class="quick-btn">حقوق مستاجر چیست؟</button>
-            </div>
+            <div class="quick-questions" id="quickQuestions"></div>
         </div>
 
         <!-- Chat Input -->
         <div class="chat-input-container" id="chatInputContainer">
             <form id="chatForm">
                 <textarea id="chatInput" placeholder="پیام خود را بنویسید..." rows="1"></textarea>
+                <button type="button" id="micBtn" title="ورودی صوتی">
+                    <i class="fa-solid fa-microphone"></i>
+                </button>
                 <button type="submit" id="sendBtn">
                     <i class="fa-solid fa-paper-plane"></i>
                 </button>
@@ -169,6 +186,19 @@
 
 
             <button id="skipAdBtn" class="skip-btn" disabled>در حال بارگذاری ویدیو...</button>
+        </div>
+    </div>
+
+    <!-- Confirm / Info Modal -->
+    <div id="confirmModal" class="confirm-overlay" style="display: none;">
+        <div class="confirm-content">
+            <div id="confirmIcon" class="confirm-icon"><i class="fa-solid fa-envelope-circle-check"></i></div>
+            <h3 id="confirmTitle">پایان گفتگو</h3>
+            <p id="confirmMessage">گفتگو به پایان برسد و خلاصه آن به ایمیل شما ارسال شود؟</p>
+            <div class="confirm-actions">
+                <button id="confirmCancelBtn" type="button" class="confirm-btn confirm-btn-muted">انصراف</button>
+                <button id="confirmOkBtn" type="button" class="confirm-btn confirm-btn-primary">تأیید</button>
+            </div>
         </div>
     </div>
 

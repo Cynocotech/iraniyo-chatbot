@@ -5,11 +5,27 @@ fetch('videos.json')
     .then(d => { YOUTUBE_VIDEOS = d.videos || []; })
     .catch(() => {});
 
+// Number of questions allowed before the ad overlay appears (admin-configurable)
+let AD_THRESHOLD = 5;
+const adThresholdNotice = document.getElementById('adThresholdNotice');
+function updateAdThresholdNotice() {
+    if (!adThresholdNotice) return;
+    adThresholdNotice.textContent = `با استفاده از این دستیار، شما می‌پذیرید که جهت تأمین هزینه‌های سرور، پس از هر ${AD_THRESHOLD} سوال یک تبلیغ مشاهده کنید. از حمایت شما سپاسگزاریم.`;
+}
+updateAdThresholdNotice();
+fetch('ads-config.json')
+    .then(r => r.json())
+    .then(d => {
+        if (d.threshold) AD_THRESHOLD = d.threshold;
+        updateAdThresholdNotice();
+    })
+    .catch(() => {});
+
 const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
 const chatInput = document.getElementById('chatInput');
 const sendBtn = document.getElementById('sendBtn');
-const quickBtns = document.querySelectorAll('.quick-btn');
+const quickQuestions = document.getElementById('quickQuestions');
 
 // Pre-chat elements
 const preChatContainer = document.getElementById('preChatContainer');
@@ -30,24 +46,100 @@ marked.setOptions({
     gfm: true
 });
 
-// C1 fix: all AI requests go through server-side proxy (real webhook URL never exposed)
-const WEBHOOK_URL = 'proxy.php';
+// All chat requests go through the server-side proxy to the Python (FastAPI) backend
+const CHAT_URL       = 'proxy.php';
+const AGENTS_URL     = 'agents.php';
+const TRANSCRIPT_URL = 'transcript.php';
 
 const notificationSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3');
 
-// Set up sessionId
-let sessionId = localStorage.getItem('n8n_chat_session');
-if (!sessionId) {
-    sessionId = 'chat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('n8n_chat_session', sessionId);
-}
+const chatInputContainer = document.getElementById('chatInputContainer');
+const quickQuestionsWrapper = document.getElementById('quickQuestionsWrapper');
+const agentTabs = document.getElementById('agentTabs');
+const agentResetBtn = document.getElementById('agentResetBtn');
+const endChatBtn = document.getElementById('endChatBtn');
+const micBtn = document.getElementById('micBtn');
+const voiceToggleBtn = document.getElementById('voiceToggleBtn');
 
 // User info handling
 let userInfo = JSON.parse(localStorage.getItem('n8n_chat_user'));
 
-const chatInputContainer = document.getElementById('chatInputContainer');
-const quickQuestionsWrapper = document.getElementById('quickQuestionsWrapper');
+// ── Agent state ─────────────────────────────────────────────
+const AGENT_KEY = 'iraniyo_agent';
+const AGENTS_WITH_RESET = ['trip-planner'];
+const HISTORY_EXPIRY_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+const MAX_STORED = 60;
 
+let AGENTS_META  = {};
+let currentAgent = localStorage.getItem(AGENT_KEY) || 'dr-yas';
+let thinking = false;
+
+function sessionKey(agent) { return `iraniyo_session_${agent}`; }
+function historyKey(agent) { return `iraniyo_history_${agent}`; }
+
+function getSessionId(agent) {
+    return localStorage.getItem(sessionKey(agent)) || '';
+}
+function setSessionId(agent, id) {
+    localStorage.setItem(sessionKey(agent), id);
+}
+
+function loadStoredMessages(agent) {
+    try {
+        const raw = JSON.parse(localStorage.getItem(historyKey(agent)) || 'null');
+        if (!raw) return [];
+        if (raw.ts && Date.now() - raw.ts > HISTORY_EXPIRY_MS) {
+            localStorage.removeItem(historyKey(agent));
+            localStorage.removeItem(sessionKey(agent));
+            return [];
+        }
+        return raw.messages || [];
+    } catch { return []; }
+}
+function saveStoredMessages(agent, msgs) {
+    if (msgs.length > MAX_STORED) msgs = msgs.slice(-MAX_STORED);
+    localStorage.setItem(historyKey(agent), JSON.stringify({ ts: Date.now(), messages: msgs }));
+}
+function appendStoredMessage(agent, role, text, html) {
+    const msgs = loadStoredMessages(agent);
+    msgs.push({ role, text, html });
+    saveStoredMessages(agent, msgs);
+}
+
+// Build Gemini-format history ({role:'user'|'assistant', content}) for
+// agents that manage their own conversation state client-side (trip planner)
+function buildClientHistory(agent) {
+    return loadStoredMessages(agent).map(m => ({
+        role: m.role === 'bot' ? 'assistant' : 'user',
+        content: m.text || ''
+    }));
+}
+
+// ── Agents metadata (icons, names, welcome messages, chips) ─
+async function loadAgentsMeta() {
+    try {
+        const res = await fetch(AGENTS_URL);
+        const list = await res.json();
+        AGENTS_META = {};
+        (list || []).forEach(a => { AGENTS_META[a.slug] = a; });
+        syncAgentTabs();
+    } catch (e) {
+        console.error('Failed to load agents:', e);
+    }
+}
+
+function syncAgentTabs() {
+    agentTabs.querySelectorAll('.agent-tab').forEach(btn => {
+        const meta = AGENTS_META[btn.dataset.agent];
+        if (!meta) return;
+        const iconEl = btn.querySelector('.agent-tab-icon');
+        const labelEl = btn.querySelector('.agent-tab-label');
+        if (iconEl) iconEl.textContent = meta.icon;
+        if (labelEl) labelEl.textContent = meta.name;
+    });
+}
+
+// ── Pre-chat / chat visibility ───────────────────────────────
 function showChat() {
     preChatContainer.style.display = 'none';
     chatInterface.style.display = 'flex';
@@ -64,7 +156,6 @@ function showPreChat() {
 
 if (userInfo && userInfo.name && userInfo.email) {
     showChat();
-    sendInitGreeting();
 } else {
     showPreChat();
 }
@@ -81,74 +172,18 @@ startChatForm.addEventListener('submit', (e) => {
         fetch('save_user.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email })
+            body: JSON.stringify({ name, email, agent_slug: currentAgent })
         }).catch(() => {});
         showChat();
-        sendInitGreeting();
+        renderAgent(currentAgent);
     }
 });
-
-async function sendInitGreeting() {
-    const typingIndicator = addTypingIndicator();
-
-    try {
-        const response = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                action: "sendMessage",
-                sessionId: sessionId,
-                chatInput: `سلام. نام من ${userInfo.name} است. لطفا به من خوش‌آمد بگو و بپرس چطور می‌توانی کمکم کنی.`,
-                metadata: userInfo
-            })
-        });
-
-        typingIndicator.remove();
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        let textResponse = '';
-        const contentType = response.headers.get("content-type");
-
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-            const data = await response.json();
-            if (Array.isArray(data) && data.length > 0) {
-                textResponse = data[0].output || data[0].text || data[0].chatResponse || JSON.stringify(data[0]);
-            } else if (data.output || data.text || data.chatResponse) {
-                textResponse = data.output || data.text || data.chatResponse;
-            } else {
-                textResponse = JSON.stringify(data);
-            }
-        } else {
-            textResponse = await response.text();
-        }
-
-        if (!textResponse || textResponse.trim() === '') {
-            textResponse = `سلام ${userInfo.name}! من دستیار هوشمند ایرانیو هستم. چطور می‌توانم کمکتان کنم؟`;
-        }
-
-        appendMessage(textResponse, 'bot');
-        notificationSound.play().catch(() => {});
-    } catch (error) {
-        typingIndicator.remove();
-        console.error('Init greeting error:', error);
-        appendMessage(`سلام ${userInfo.name}! متاسفانه در ارتباط با سرور مشکلی پیش آمد.`, 'bot');
-    }
-}
 
 // Auto-resize textarea
 chatInput.addEventListener('input', function () {
     this.style.height = 'auto';
     this.style.height = (this.scrollHeight) + 'px';
-    if (this.value.trim() === '') {
-        sendBtn.disabled = true;
-    } else {
-        sendBtn.disabled = false;
-    }
+    sendBtn.disabled = this.value.trim() === '';
 });
 
 chatInput.addEventListener('keydown', function (e) {
@@ -161,20 +196,356 @@ chatInput.addEventListener('keydown', function (e) {
     }
 });
 
-// Quick questions handler
-quickBtns.forEach(btn => {
+// ── Rendering helpers ────────────────────────────────────────
+function escapeHtml(t) {
+    return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderMessageDOM(html, sender) {
+    const msgDiv = document.createElement('div');
+    msgDiv.classList.add('message', sender);
+
+    const avatarDiv = document.createElement('div');
+    avatarDiv.classList.add('msg-avatar');
+    if (sender === 'bot') {
+        avatarDiv.innerHTML = AGENTS_META[currentAgent]?.icon || '<i class="fa-solid fa-robot"></i>';
+    } else {
+        avatarDiv.innerHTML = '<i class="fa-solid fa-user"></i>';
+    }
+
+    const contentDiv = document.createElement('div');
+    contentDiv.classList.add('message-content');
+    contentDiv.innerHTML = html;
+
+    msgDiv.appendChild(avatarDiv);
+    msgDiv.appendChild(contentDiv);
+    chatMessages.appendChild(msgDiv);
+    return msgDiv;
+}
+
+// Render + (optionally) persist a NEW message (user input or bot reply)
+function addMessage(content, sender, persist = true) {
+    let html, text;
+    if (sender === 'bot') {
+        const rendered = typeof marked !== 'undefined' ? marked.parse(content) : content.replace(/\n/g, '<br>');
+        html = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rendered) : rendered;
+        text = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    } else {
+        text = content;
+        html = escapeHtml(content);
+    }
+    renderMessageDOM(html, sender);
+    scrollToBottom();
+    if (persist) appendStoredMessage(currentAgent, sender, text, html);
+    if (sender === 'bot' && persist) speak(text);
+}
+
+function addTypingIndicator() {
+    const indicator = document.createElement('div');
+    indicator.classList.add('typing-indicator', 'active', 'message', 'bot');
+    const icon = AGENTS_META[currentAgent]?.icon || '<i class="fa-solid fa-robot"></i>';
+    indicator.innerHTML = `
+        <div class="msg-avatar">${icon}</div>
+        <div class="message-content" style="display: flex; align-items: center; gap: 8px;">
+            <i class="fa-solid fa-circle-notch fa-spin" style="color: var(--primary-hover); font-size: 1.1rem;"></i>
+            <span style="font-size: 0.9rem; color: var(--text-main);">در حال بررسی و جستجو...</span>
+        </div>
+    `;
+    chatMessages.appendChild(indicator);
+    scrollToBottom();
+    return indicator;
+}
+
+function scrollToBottom() {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// ── Suggestion chips ─────────────────────────────────────────
+function renderChips(meta) {
+    quickQuestions.innerHTML = '';
+    (meta?.chips || []).forEach(chip => {
+        const btn = document.createElement('button');
+        btn.className = 'quick-btn';
+        btn.type = 'button';
+        btn.textContent = chip;
+        btn.addEventListener('click', () => {
+            if (thinking) return;
+            const clean = chip.replace(/^[\p{Emoji}\s]+/u, '').trim() || chip.trim();
+            chatInput.value = clean;
+            chatInput.style.height = 'auto';
+            sendBtn.disabled = false;
+            chatForm.requestSubmit();
+        });
+        quickQuestions.appendChild(btn);
+    });
+}
+
+// ── Agent rendering / switching ──────────────────────────────
+function renderAgent(agent) {
+    chatMessages.innerHTML = '';
+    const meta = AGENTS_META[agent];
+    const stored = loadStoredMessages(agent);
+
+    if (stored.length) {
+        stored.forEach(m => renderMessageDOM(m.html, m.role));
+    } else if (meta) {
+        const greet = userInfo?.name ? `سلام ${userInfo.name}! ` : '';
+        addMessage(greet + meta.welcome_message, 'bot', false);
+    } else {
+        addMessage('⚠️ اتصال به دستیار برقرار نشد. لطفاً صفحه را تازه‌سازی کنید.', 'bot', false);
+    }
+
+    renderChips(meta);
+    agentTabs.classList.toggle('show-reset', AGENTS_WITH_RESET.includes(agent));
+    scrollToBottom();
+}
+
+agentTabs.querySelectorAll('.agent-tab').forEach(btn => {
     btn.addEventListener('click', () => {
-        chatInput.value = btn.textContent;
-        chatInput.style.height = 'auto'; // Reset height
-        sendBtn.disabled = false;
-        chatForm.requestSubmit();
+        if (thinking) return;
+        const agent = btn.dataset.agent;
+        if (agent === currentAgent) return;
+        cancelSpeech();
+        currentAgent = agent;
+        localStorage.setItem(AGENT_KEY, agent);
+        agentTabs.querySelectorAll('.agent-tab').forEach(b => b.classList.toggle('active', b.dataset.agent === agent));
+        if (chatInterface.style.display !== 'none') renderAgent(agent);
+        chatInput.focus();
     });
 });
 
+// ── Themed confirm / info modal (replaces native confirm()/alert()) ──
+const confirmModal = document.getElementById('confirmModal');
+const confirmIcon = document.getElementById('confirmIcon');
+const confirmTitle = document.getElementById('confirmTitle');
+const confirmMessage = document.getElementById('confirmMessage');
+const confirmOkBtn = document.getElementById('confirmOkBtn');
+const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+
+function showModal({ icon = 'fa-circle-info', title, message, okLabel = 'باشه', cancelLabel = null }) {
+    return new Promise((resolve) => {
+        confirmIcon.innerHTML = `<i class="fa-solid ${icon}"></i>`;
+        confirmTitle.textContent = title;
+        confirmMessage.textContent = message;
+        confirmOkBtn.textContent = okLabel;
+        confirmCancelBtn.style.display = cancelLabel ? '' : 'none';
+        confirmCancelBtn.textContent = cancelLabel || '';
+        confirmModal.style.display = 'flex';
+
+        function close(result) {
+            confirmModal.style.display = 'none';
+            confirmOkBtn.removeEventListener('click', onOk);
+            confirmCancelBtn.removeEventListener('click', onCancel);
+            resolve(result);
+        }
+        function onOk() { close(true); }
+        function onCancel() { close(false); }
+        confirmOkBtn.addEventListener('click', onOk);
+        confirmCancelBtn.addEventListener('click', onCancel);
+    });
+}
+
+agentResetBtn.addEventListener('click', async () => {
+    if (thinking) return;
+    const ok = await showModal({
+        icon: 'fa-rotate-right',
+        title: 'شروع مجدد گفتگو',
+        message: 'گفتگو را از ابتدا شروع کنیم؟',
+        okLabel: 'بله، شروع مجدد',
+        cancelLabel: 'انصراف',
+    });
+    if (!ok) return;
+    cancelSpeech();
+    localStorage.removeItem(historyKey(currentAgent));
+    localStorage.removeItem(sessionKey(currentAgent));
+    localStorage.removeItem(sentTranscriptKey(currentAgent));
+    renderAgent(currentAgent);
+});
+
+// ── End chat: email the transcript + thank-you note ────────────
+function sentTranscriptKey(agent) { return `iraniyo_transcript_sent_${agent}`; }
+function markTranscriptSent(agent) { localStorage.setItem(sentTranscriptKey(agent), 'true'); }
+function transcriptAlreadySent(agent) { return localStorage.getItem(sentTranscriptKey(agent)) === 'true'; }
+
+function buildTranscriptPayload(agent) {
+    return JSON.stringify({
+        to_email: userInfo.email,
+        to_name: userInfo.name || '',
+        agent_slug: agent,
+        messages: loadStoredMessages(agent).map(m => ({ role: m.role, text: m.text || '' })),
+    });
+}
+
+endChatBtn.addEventListener('click', async () => {
+    if (thinking || endChatBtn.disabled) return;
+
+    if (!userInfo?.email) {
+        await showModal({
+            icon: 'fa-circle-exclamation',
+            title: 'ایمیل ثبت نشده است',
+            message: 'برای ارسال خلاصه گفتگو، ابتدا ایمیل خود را در ابتدای گفتگو وارد کنید.',
+        });
+        return;
+    }
+    const messages = loadStoredMessages(currentAgent);
+    if (!messages.length) {
+        await showModal({
+            icon: 'fa-circle-exclamation',
+            title: 'گفتگویی یافت نشد',
+            message: 'هنوز گفتگویی برای ارسال وجود ندارد.',
+        });
+        return;
+    }
+    const ok = await showModal({
+        icon: 'fa-envelope-circle-check',
+        title: 'پایان گفتگو',
+        message: 'گفتگو به پایان برسد و خلاصه آن به ایمیل شما ارسال شود؟',
+        okLabel: 'بله، ارسال شود',
+        cancelLabel: 'انصراف',
+    });
+    if (!ok) return;
+
+    const originalIcon = endChatBtn.innerHTML;
+    endChatBtn.disabled = true;
+    endChatBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+
+    try {
+        const res = await fetch(TRANSCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: buildTranscriptPayload(currentAgent),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || err.error || 'ارسال ایمیل ناموفق بود');
+        }
+        markTranscriptSent(currentAgent);
+        endChatBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+        await showModal({
+            icon: 'fa-circle-check',
+            title: 'ارسال شد',
+            message: 'خلاصه گفتگو به ایمیل شما ارسال شد. سپاسگزاریم! 💜',
+        });
+    } catch (err) {
+        console.error('Send transcript error:', err);
+        endChatBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+        await showModal({
+            icon: 'fa-circle-exclamation',
+            title: 'خطا در ارسال',
+            message: 'متأسفانه ارسال ایمیل با خطا مواجه شد. لطفاً بعداً دوباره تلاش کنید.',
+        });
+    } finally {
+        setTimeout(() => {
+            endChatBtn.innerHTML = originalIcon;
+            endChatBtn.disabled = false;
+        }, 2000);
+    }
+});
+
+// Automatically email the transcript once when the user leaves the page,
+// so they still get a summary even if they forget to tap "End chat".
+window.addEventListener('pagehide', () => {
+    if (!userInfo?.email) return;
+    if (transcriptAlreadySent(currentAgent)) return;
+    if (!loadStoredMessages(currentAgent).length) return;
+    const blob = new Blob([buildTranscriptPayload(currentAgent)], { type: 'application/json' });
+    if (navigator.sendBeacon(TRANSCRIPT_URL, blob)) {
+        markTranscriptSent(currentAgent);
+    }
+});
+
+// ── Voice chat: text-to-speech (bot replies) ──────────────────
+const VOICE_KEY = 'iraniyo_voice_enabled';
+let voiceEnabled = localStorage.getItem(VOICE_KEY) === 'true';
+let persianVoice = null;
+
+function pickPersianVoice() {
+    if (!window.speechSynthesis) return;
+    const voices = speechSynthesis.getVoices();
+    persianVoice = voices.find(v => /^fa/i.test(v.lang)) || null;
+}
+
+function cancelSpeech() {
+    if (window.speechSynthesis) speechSynthesis.cancel();
+}
+
+function speak(text) {
+    if (!voiceEnabled || !window.speechSynthesis || !text) return;
+    cancelSpeech();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = persianVoice?.lang || 'fa-IR';
+    if (persianVoice) utterance.voice = persianVoice;
+    speechSynthesis.speak(utterance);
+}
+
+if (window.speechSynthesis) {
+    pickPersianVoice();
+    speechSynthesis.addEventListener('voiceschanged', pickPersianVoice);
+    voiceToggleBtn.classList.toggle('active', voiceEnabled);
+    voiceToggleBtn.addEventListener('click', () => {
+        voiceEnabled = !voiceEnabled;
+        localStorage.setItem(VOICE_KEY, voiceEnabled ? 'true' : 'false');
+        voiceToggleBtn.classList.toggle('active', voiceEnabled);
+        if (!voiceEnabled) cancelSpeech();
+    });
+} else {
+    voiceToggleBtn.style.display = 'none';
+}
+
+// ── Voice chat: speech-to-text (mic input) ────────────────────
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+
+if (SpeechRecognitionAPI) {
+    recognition = new SpeechRecognitionAPI();
+    recognition.lang = 'fa-IR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.addEventListener('result', (e) => {
+        const transcript = e.results[0][0].transcript.trim();
+        if (transcript) {
+            chatInput.value = transcript;
+            chatInput.style.height = 'auto';
+            chatInput.style.height = chatInput.scrollHeight + 'px';
+            sendBtn.disabled = false;
+            chatForm.requestSubmit();
+        }
+    });
+    recognition.addEventListener('end', () => micBtn.classList.remove('recording'));
+    recognition.addEventListener('error', () => micBtn.classList.remove('recording'));
+
+    micBtn.addEventListener('click', () => {
+        if (thinking) return;
+        if (micBtn.classList.contains('recording')) {
+            recognition.stop();
+            return;
+        }
+        cancelSpeech();
+        try {
+            recognition.start();
+            micBtn.classList.add('recording');
+        } catch (err) {
+            console.error('Speech recognition error:', err);
+        }
+    });
+} else {
+    micBtn.classList.add('unsupported');
+}
+
+// ── Init ──────────────────────────────────────────────────────
+(async function init() {
+    await loadAgentsMeta();
+    agentTabs.querySelectorAll('.agent-tab').forEach(b => b.classList.toggle('active', b.dataset.agent === currentAgent));
+    if (chatInterface.style.display !== 'none') renderAgent(currentAgent);
+})();
+
+// ── Send message ─────────────────────────────────────────────
 chatForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const messageText = chatInput.value.trim();
-    if (!messageText) return;
+    if (!messageText || thinking) return;
 
     // Check paywall via Server (IP tracking)
     let currentCount = 0;
@@ -188,146 +559,80 @@ chatForm.addEventListener('submit', async (e) => {
         currentCount = questionCount;
     }
 
-    if (currentCount >= 5) {
+    if (currentCount >= AD_THRESHOLD) {
         pendingMessage = messageText;
         showAdOverlay();
         return;
     }
 
+    const agent = currentAgent;
+    const meta = AGENTS_META[agent];
+
+    // Build client-side history (Gemini format) BEFORE persisting this new
+    // message — agents like the trip planner manage their own state.
+    const clientHistory = meta?.use_client_history ? buildClientHistory(agent) : undefined;
+
     // Reset input
     chatInput.value = '';
     chatInput.style.height = 'auto';
     sendBtn.disabled = true;
+    thinking = true;
 
     // Add user message to UI
-    appendMessage(messageText, 'user');
+    addMessage(messageText, 'user');
 
     // Show typing indicator
     const typingIndicator = addTypingIndicator();
     if (window.setNeuralSpeed) setNeuralSpeed(true);
-    scrollToBottom();
 
     try {
-        const response = await fetch(WEBHOOK_URL, {
+        const payload = {
+            message: messageText,
+            agent_slug: agent,
+        };
+        const sid = getSessionId(agent);
+        if (sid) payload.session_id = sid;
+        if (clientHistory) payload.client_history = clientHistory;
+        if (userInfo?.name) payload.user_name = userInfo.name;
+        if (userInfo?.email) payload.user_email = userInfo.email;
+
+        const response = await fetch(CHAT_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             },
-            body: JSON.stringify({
-                action: "sendMessage",
-                sessionId: sessionId,
-                chatInput: messageText,
-                metadata: userInfo // Send name and email to n8n
-            })
+            body: JSON.stringify(payload)
         });
 
         // Remove typing indicator
         typingIndicator.remove();
         if (window.setNeuralSpeed) setNeuralSpeed(false);
 
+        const data = await response.json();
+
         if (!response.ok) {
-            if (response.status === 404) {
-                throw new Error("Webhook 404: The n8n workflow is either inactive or not listening.");
-            }
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(data.error || data.detail || `HTTP error! status: ${response.status}`);
         }
 
-        // Parse response
-        let textResponse = '';
-        const contentType = response.headers.get("content-type");
+        if (data.session_id) setSessionId(agent, data.session_id);
 
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-            const data = await response.json();
-
-            // Handle n8n array response structure
-            if (Array.isArray(data) && data.length > 0) {
-                textResponse = data[0].output || data[0].text || data[0].chatResponse || JSON.stringify(data[0]);
-            }
-            // Handle n8n object response structure
-            else if (data.output || data.text || data.chatResponse) {
-                textResponse = data.output || data.text || data.chatResponse;
-            } else {
-                textResponse = JSON.stringify(data);
-            }
-        } else {
-            // Handle plain text response
-            textResponse = await response.text();
-        }
-
-        if (!textResponse || textResponse.trim() === '') {
-            textResponse = 'هیچ پاسخی دریافت نشد.';
-        }
-
-        appendMessage(textResponse, 'bot');
+        const textResponse = (data.answer && data.answer.trim()) || 'هیچ پاسخی دریافت نشد.';
+        addMessage(textResponse, 'bot');
 
         // Play notification sound
         notificationSound.play().catch(() => {});
     } catch (error) {
         typingIndicator.remove();
         if (window.setNeuralSpeed) setNeuralSpeed(false);
-        console.error('Error contacting n8n webhook:', error);
-
-        let errorMsg = 'متاسفانه در ارتباط با سرور مشکلی پیش آمد. لطفا مجددا تلاش کنید.';
-        if (error.message.includes('Webhook 404')) {
-            errorMsg = 'سرور n8n در دسترس نیست (خطای ۴۰۴). لطفاً مطمئن شوید که ورک‌فلو در n8n **فعال (Active)** است یا دکمه **Execute Workflow** را برای تست زده‌اید.';
-        }
-
-        appendMessage(errorMsg, 'bot');
+        console.error('Error contacting chat backend:', error);
+        addMessage('متاسفانه در ارتباط با سرور مشکلی پیش آمد. لطفا مجددا تلاش کنید.', 'bot', false);
+    } finally {
+        thinking = false;
+        sendBtn.disabled = chatInput.value.trim() === '';
+        chatInput.focus();
     }
 });
-
-function appendMessage(text, sender) {
-    const msgDiv = document.createElement('div');
-    msgDiv.classList.add('message', sender);
-
-    const avatarDiv = document.createElement('div');
-    avatarDiv.classList.add('msg-avatar');
-    if (sender === 'bot') {
-        avatarDiv.innerHTML = '<i class="fa-solid fa-robot"></i>';
-    } else {
-        avatarDiv.innerHTML = '<i class="fa-solid fa-user"></i>';
-    }
-
-    const contentDiv = document.createElement('div');
-    contentDiv.classList.add('message-content');
-
-    if (sender === 'bot') {
-        const raw = typeof marked !== 'undefined' ? marked.parse(text) : text.replace(/\n/g, '<br>');
-        // C4 fix: sanitize rendered HTML to prevent XSS
-        contentDiv.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
-    } else {
-        // User text is plain text, escape it properly
-        contentDiv.textContent = text;
-    }
-
-    msgDiv.appendChild(avatarDiv);
-    msgDiv.appendChild(contentDiv);
-    chatMessages.appendChild(msgDiv);
-    scrollToBottom();
-}
-
-function addTypingIndicator() {
-    const indicator = document.createElement('div');
-    indicator.classList.add('typing-indicator', 'active', 'message', 'bot');
-    indicator.innerHTML = `
-        <div class="msg-avatar"><i class="fa-solid fa-robot"></i></div>
-        <div class="message-content" style="display: flex; align-items: center; gap: 8px;">
-            <i class="fa-solid fa-circle-notch fa-spin" style="color: var(--primary-hover); font-size: 1.1rem;"></i>
-            <span style="font-size: 0.9rem; color: var(--text-main);">در حال بررسی و جستجو...</span>
-        </div>
-    `;
-    chatMessages.appendChild(indicator);
-    return indicator;
-}
-
-function scrollToBottom() {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-// Initial state
-sendBtn.disabled = true;
-chatInput.focus();
 
 // --- Ad Paywall Logic ---
 let ytPlayer;
@@ -346,11 +651,11 @@ function getNextVideoId() {
     if (!YOUTUBE_VIDEOS.length) return null;
     const link = YOUTUBE_VIDEOS[currentVideoIndex];
     const id = getYouTubeID(link);
-    
+
     // Increment index for next time
     currentVideoIndex = (currentVideoIndex + 1) % YOUTUBE_VIDEOS.length;
     localStorage.setItem('n8n_chat_vid_idx', currentVideoIndex);
-    
+
     return id;
 }
 
@@ -432,7 +737,7 @@ function showAdOverlay() {
         initYouTubePlayer();
     } else {
         const nextVideoId = getNextVideoId();
-        
+
         if (ytPlayer.loadVideoById) {
             ytPlayer.loadVideoById(nextVideoId);
         } else {

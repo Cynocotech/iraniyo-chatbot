@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iraniano}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iraniano}
+      POSTGRES_DB: ${POSTGRES_DB:-iraniano}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iraniano}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dryas:
+    build: .
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:

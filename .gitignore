@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment secrets
+.env
+
+# macOS
+.DS_Store
+._*
+
+# Generated / local-only data
+.agents.cache.json
+users.csv

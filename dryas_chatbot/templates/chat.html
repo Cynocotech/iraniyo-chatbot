@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ایرانیانو – دستیار هوشمند</title>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --card: #22263a;
+    --accent: #6c63ff; --accent2: #00c9a7;
+    --text: #e8eaf0; --muted: #8891a5; --border: #2e3349;
+    --user-bg: #6c63ff; --bot-bg: #22263a;
+    --radius: 14px; --font: 'Vazirmatn', Tahoma, sans-serif;
+    --header-h: 64px;
+    --input-h: 68px;
+  }
+
+  /* ── Full-screen fixed layout ── */
+  html, body {
+    height: 100%; overflow: hidden;
+    font-family: var(--font); background: var(--bg); color: var(--text);
+  }
+
+  .layout {
+    display: flex; flex-direction: column;
+    height: 100vh; max-width: 780px;
+    margin: 0 auto;
+  }
+
+  /* ── Header — fixed height ── */
+  .header {
+    flex-shrink: 0;
+    height: var(--header-h);
+    background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+    display: flex; align-items: center; gap: 12px;
+    z-index: 10;
+  }
+  .back-btn {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 16px;
+    transition: all .2s; flex-shrink: 0; text-decoration: none;
+    display: flex; align-items: center;
+  }
+  .back-btn:hover { border-color: var(--accent); color: var(--text); }
+  .avatar {
+    width: 40px; height: 40px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 18px; box-shadow: 0 0 0 3px rgba(108,99,255,.2);
+  }
+  .header-info { flex: 1; min-width: 0; }
+  .header-info h1 { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .header-info p  { font-size: 11px; color: var(--accent2); margin-top: 1px; }
+  .status-dot {
+    width: 7px; height: 7px; background: var(--accent2); border-radius: 50%;
+    display: inline-block; margin-left: 5px; animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* reset button — trip planner only, hidden by default */
+  .reset-btn {
+    display: none;
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px;
+    white-space: nowrap; flex-shrink: 0; transition: all .2s;
+  }
+  .reset-btn:hover { border-color: var(--danger, #ef4444); color: #ef4444; }
+  .show-reset .reset-btn { display: flex; align-items: center; gap: 5px; }
+
+  /* ── Messages — scrollable middle ── */
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    scroll-behavior: smooth;
+  }
+
+  /* ── Input bar — fixed height at bottom ── */
+  .input-bar {
+    flex-shrink: 0;
+    height: var(--input-h);
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    padding: 12px;
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  #userInput {
+    flex: 1; background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font-family: var(--font);
+    font-size: 14px; padding: 10px 14px; resize: none; outline: none;
+    line-height: 1.6; max-height: 100px; overflow-y: auto;
+    transition: border-color .2s;
+  }
+  #userInput:focus { border-color: var(--accent); }
+  #userInput::placeholder { color: var(--muted); }
+  #sendBtn {
+    width: 44px; height: 44px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; transition: opacity .2s, transform .15s;
+  }
+  #sendBtn:hover { opacity: .85; transform: scale(1.05); }
+  #sendBtn:disabled { opacity: .4; cursor: default; transform: none; }
+
+  /* ── Messages ── */
+  .msg { display: flex; gap: 10px; max-width: 86%; animation: fadeUp .22s ease; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.bot  { align-self: flex-start; }
+  .msg-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0; margin-top: 3px;
+  }
+  .msg.user .msg-avatar { background: var(--user-bg); }
+  .msg.bot  .msg-avatar { background: linear-gradient(135deg,var(--accent),var(--accent2)); }
+  .bubble {
+    padding: 10px 14px; border-radius: var(--radius);
+    line-height: 1.75; font-size: 13.5px; word-break: break-word;
+  }
+  .msg.user .bubble { background: var(--user-bg); border-bottom-left-radius: 4px; }
+  .msg.bot  .bubble { background: var(--bot-bg); border: 1px solid var(--border); border-bottom-right-radius: 4px; }
+  .bubble b { color: #cdd5ff; }
+  .bubble a { color: var(--accent2); text-decoration: none; }
+  .bubble a:hover { text-decoration: underline; }
+  .ts { font-size: 10px; color: var(--muted); margin-top: 3px; text-align: right; }
+  .msg.user .ts { text-align: left; }
+
+  /* ── Typing ── */
+  .typing { display: flex; align-items: center; gap: 5px; padding: 8px 14px; }
+  .dot { width: 6px; height: 6px; background: var(--muted); border-radius: 50%; animation: bounce .9s infinite; }
+  .dot:nth-child(2){animation-delay:.15s} .dot:nth-child(3){animation-delay:.30s}
+  @keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+
+  /* ── Welcome ── */
+  .welcome { text-align: center; padding: 32px 16px; color: var(--muted); }
+  .welcome h2 { font-size: 19px; color: var(--text); margin-bottom: 8px; }
+  .welcome p { font-size: 13px; line-height: 1.8; max-width: 400px; margin: 0 auto 16px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; }
+  .chip {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 13px; font-size: 12px;
+    cursor: pointer; transition: border-color .2s, background .2s;
+  }
+  .chip:hover { border-color: var(--accent); background: #2a2d45; }
+
+  /* ── Scrollbar ── */
+  #messages::-webkit-scrollbar { width: 4px; }
+  #messages::-webkit-scrollbar-track { background: transparent; }
+  #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<div class="layout" id="layout">
+  <div class="header">
+    <a class="back-btn" href="/" title="بازگشت">←</a>
+    <div class="avatar" id="agentIcon">🤖</div>
+    <div class="header-info">
+      <h1 id="agentName">دستیار ایرانیانو <span class="status-dot"></span> <span style="font-size:9px;font-weight:700;background:#f59e0b;color:#0f1117;padding:2px 6px;border-radius:5px;vertical-align:middle;letter-spacing:.04em">نسخه آزمایشی</span></h1>
+      <p id="agentDesc">در حال بارگذاری…</p>
+    </div>
+    <button class="reset-btn" id="resetBtn" onclick="resetConversation()" title="شروع مجدد">
+      🔄 شروع مجدد
+    </button>
+  </div>
+
+  <div id="messages">
+    <div class="welcome" id="welcome">
+      <div style="font-size:38px;margin-bottom:10px" id="welcomeIcon">🤖</div>
+      <h2 id="welcomeTitle">سلام!</h2>
+      <p id="welcomeText">در حال بارگذاری…</p>
+      <div class="chips" id="chipsRow"></div>
+    </div>
+  </div>
+
+  <div class="input-bar">
+    <textarea id="userInput" rows="1" placeholder="پیام بنویسید…" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+    <button id="sendBtn" onclick="sendMessage()" title="ارسال">➤</button>
+  </div>
+</div>
+
+<script>
+const agentSlug  = location.pathname.split('/').pop() || 'dr-yas';
+const SESSION_KEY = `dryas_session_${agentSlug}`;
+const HISTORY_KEY = `dryas_history_${agentSlug}`;
+const MAX_STORED  = 60;
+
+// Agents that show the reset button
+const AGENTS_WITH_RESET = ['trip-planner'];
+
+let sessionId = localStorage.getItem(SESSION_KEY) || '';
+let thinking  = false;
+let agentData = null;
+
+// ── Scroll ────────────────────────────────────────────────
+function scrollToBottom() {
+  const msgs = document.getElementById('messages');
+  // Double rAF: first frame lets browser calculate layout, second actually scrolls
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      msgs.scrollTop = msgs.scrollHeight;
+    });
+  });
+}
+
+// ── Load agent ────────────────────────────────────────────
+async function loadAgent() {
+  try {
+    const res = await fetch('/agents');
+    const agents = await res.json();
+    agentData = agents.find(a => a.slug === agentSlug);
+    if (!agentData) {
+      document.body.innerHTML = '<p style="color:#ef4444;padding:40px;text-align:center">Agent not found</p>';
+      return;
+    }
+    document.title = `ایرانیانو – ${agentData.name}`;
+    document.getElementById('agentIcon').textContent    = agentData.icon;
+    document.getElementById('agentName').innerHTML      = agentData.name + ' <span class="status-dot"></span>';
+    document.getElementById('agentDesc').textContent    = agentData.description;
+    document.getElementById('welcomeIcon').textContent  = agentData.icon;
+    document.getElementById('welcomeTitle').textContent = agentData.name;
+    document.getElementById('welcomeText').innerHTML    = agentData.welcome_message;
+
+    // Show reset button only for agents that need it
+    if (AGENTS_WITH_RESET.includes(agentSlug)) {
+      document.getElementById('layout').classList.add('show-reset');
+    }
+
+    const chipsRow = document.getElementById('chipsRow');
+    chipsRow.innerHTML = '';
+    (agentData.chips || []).forEach(chip => {
+      const el = document.createElement('div');
+      el.className = 'chip';
+      el.textContent = chip;
+      el.onclick = () => sendChip(chip);
+      chipsRow.appendChild(el);
+    });
+
+    restoreHistory();
+    // Sync Gemini history after restore
+    if (agentData.use_client_history) {
+      _geminiHistory = buildGeminiHistory(loadStoredMessages());
+    }
+  } catch(e) {
+    console.error('Failed to load agent:', e);
+  }
+}
+
+// ── Persistent history ────────────────────────────────────
+const EXPIRY_DAYS = 5;
+const EXPIRY_MS   = EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+function loadStoredMessages() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || 'null');
+    if (!raw) return [];
+    // Auto-clear if older than EXPIRY_DAYS
+    if (raw.ts && Date.now() - raw.ts > EXPIRY_MS) {
+      localStorage.removeItem(HISTORY_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      return [];
+    }
+    return raw.messages || [];
+  } catch { return []; }
+}
+function saveStoredMessages(msgs) {
+  if (msgs.length > MAX_STORED) msgs = msgs.slice(-MAX_STORED);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify({ ts: Date.now(), messages: msgs }));
+}
+function appendStoredMessage(role, html, ts) {
+  const msgs = loadStoredMessages();
+  msgs.push({ role, html, ts });
+  saveStoredMessages(msgs);
+  // Keep in-memory gemini history in sync
+  if (agentData?.use_client_history) {
+    _geminiHistory = buildGeminiHistory(msgs);
+  }
+}
+
+// Build the Gemini-format history array from stored messages (role + content only)
+// Used when use_client_history = true
+let _geminiHistory = [];  // kept in sync with stored messages
+
+function buildGeminiHistory(stored) {
+  // stored items have { role, html, ts } — we need { role, content }
+  // role is 'user' or 'bot' in UI; Gemini needs 'user' or 'assistant'
+  return stored
+    .filter(m => m.role === 'user' || m.role === 'bot')
+    .map(m => ({
+      role:    m.role === 'bot' ? 'assistant' : 'user',
+      content: m.role === 'user'
+        // user messages are HTML-escaped plain text
+        ? (m.html || '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+        // bot messages may have HTML — strip tags for Gemini context
+        : (m.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    }));
+}
+
+// ── Render ────────────────────────────────────────────────
+function getTime() {
+  return new Date().toLocaleTimeString('fa-IR', { hour:'2-digit', minute:'2-digit' });
+}
+function renderMessage(role, html, timestamp) {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  const icon = role === 'user' ? '👤' : (agentData?.icon || '🤖');
+  div.innerHTML = `
+    <div class="msg-avatar">${icon}</div>
+    <div><div class="bubble">${html}</div><div class="ts">${timestamp || getTime()}</div></div>`;
+  msgs.appendChild(div);
+  return div;
+}
+function addMessage(role, html, timestamp, persist = true) {
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.remove();
+  const ts = timestamp || getTime();
+  renderMessage(role, html, ts);
+  scrollToBottom();
+  if (persist) appendStoredMessage(role, html, ts);
+}
+function restoreHistory() {
+  const stored = loadStoredMessages();
+  if (!stored.length) return;
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.remove();
+  stored.forEach(m => renderMessage(m.role, m.html, m.ts));
+  scrollToBottom();
+}
+
+// ── Typing ────────────────────────────────────────────────
+function showTyping() {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg bot'; div.id = 'typing-indicator';
+  div.innerHTML = `<div class="msg-avatar">${agentData?.icon||'🤖'}</div><div class="bubble typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+  msgs.appendChild(div);
+  scrollToBottom();
+}
+function removeTyping() {
+  const t = document.getElementById('typing-indicator');
+  if (t) t.remove();
+}
+
+// ── Send ──────────────────────────────────────────────────
+async function sendMessage() {
+  if (thinking) return;
+  const input = document.getElementById('userInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = ''; autoResize(input);
+  addMessage('user', escapeHtml(msg));
+  showTyping();
+  document.getElementById('sendBtn').disabled = true;
+  thinking = true;
+  try {
+    // For client-history agents, send the conversation history with the request
+    // so the backend can pass it directly to Gemini without any server-side storage
+    const payload = {
+      message:    msg,
+      session_id: sessionId || undefined,
+      agent_slug: agentSlug,
+    };
+    if (agentData?.use_client_history) {
+      payload.client_history = [..._geminiHistory];
+    }
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    removeTyping();
+    if (!res.ok) throw new Error(data.detail || 'خطا');
+    if (data.session_id) {
+      sessionId = data.session_id;
+      localStorage.setItem(SESSION_KEY, sessionId);
+    }
+    addMessage('bot', data.answer);
+  } catch(e) {
+    removeTyping();
+    addMessage('bot', `⚠️ خطا: ${e.message}`, null, false);
+  } finally {
+    thinking = false;
+    document.getElementById('sendBtn').disabled = false;
+    input.focus();
+  }
+}
+
+// ── Reset conversation (trip planner) ────────────────────
+function resetConversation() {
+  if (!confirm('گفتگو را از ابتدا شروع کنیم؟')) return;
+  localStorage.removeItem(HISTORY_KEY);
+  localStorage.removeItem(SESSION_KEY);
+  sessionId = '';
+  _geminiHistory = [];
+
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = '';
+
+  // Show a neutral start screen — NOT the welcome_message (which has the first question)
+  // so Gemini doesn't think it's a new session greeting and restart the flow
+  const welcome = document.createElement('div');
+  welcome.className = 'welcome'; welcome.id = 'welcome';
+  welcome.innerHTML = `
+    <div style="font-size:38px;margin-bottom:10px">${agentData?.icon||'✈️'}</div>
+    <h2>${agentData?.name||'برنامه‌ریز سفر'}</h2>
+    <p>می‌خواهی به کجا سفر کنی؟</p>
+    <div class="chips" id="chipsRow"></div>`;
+  msgs.appendChild(welcome);
+
+  // Re-render chips
+  const chipsRow = document.getElementById('chipsRow');
+  (agentData?.chips||[]).forEach(chip => {
+    const el = document.createElement('div');
+    el.className = 'chip'; el.textContent = chip;
+    el.onclick = () => sendChip(chip);
+    chipsRow.appendChild(el);
+  });
+}
+
+function sendChip(text) {
+  // Strip leading emoji + space (works for multi-byte emoji too)
+  const clean = text.replace(/^[\p{Emoji}\s]+/u, '').trim() || text.trim();
+  document.getElementById('userInput').value = clean;
+  sendMessage();
+}
+function handleKey(e) { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} }
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 100) + 'px';
+}
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Init ──────────────────────────────────────────────────
+loadAgent();
+</script>
+</body>
+</html>

@@ -4,6 +4,11 @@ RewriteEngine On
 RewriteCond %{HTTPS} off
 RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
+# Admin panel: proxy /admin and /admin/* to the FastAPI backend
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^admin(/.*)?$ admin-proxy.php [L]
+
 # 1. Remove .html extension from URLs
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME}\.html -f
@@ -19,8 +24,8 @@ RewriteRule ^(.*)index\.html$ /$1 [L,R=301]
     Deny from all
 </FilesMatch>
 
-# Block .json files except videos.json (which is intentionally public)
-<FilesMatch "^(?!videos\.json$).*\.json$">
+# Block .json files except videos.json and ads-config.json (intentionally public)
+<FilesMatch "^(?!(videos|ads-config)\.json$).*\.json$">
     Order allow,deny
     Deny from all
 </FilesMatch>

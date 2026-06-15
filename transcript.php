@@ -1,5 +1,5 @@
 <?php
-// ── Proxy: forwards collected user leads (name/email) to the local Python (FastAPI / dryas_chatbot) backend ──
+// ── Proxy: forwards "end chat" transcript emails to the local Python (FastAPI / dryas_chatbot) backend ──
 header('Content-Type: application/json');
 
 require_once __DIR__ . '/cors.php';
@@ -18,52 +18,54 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $raw  = file_get_contents('php://input');
 $data = json_decode($raw, true);
 
-if (!$data) {
+if (!$data || empty($data['to_email'])) {
     http_response_code(400);
-    echo json_encode(['error' => 'Invalid JSON']);
+    echo json_encode(['error' => 'Invalid request']);
     exit;
 }
 
-// Validate and sanitize inputs
-$name  = isset($data['name'])  ? trim(strip_tags($data['name']))  : '';
-$email = isset($data['email']) ? trim($data['email'])             : '';
-
-$name  = mb_substr($name, 0, 100);
-$email = filter_var($email, FILTER_VALIDATE_EMAIL);
-
-if (!$name || !$email) {
+$toEmail = trim((string) $data['to_email']);
+if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
     http_response_code(400);
-    echo json_encode(['error' => 'Invalid name or email']);
+    echo json_encode(['error' => 'Invalid email address']);
     exit;
 }
 
-$payload = [
-    'name'  => $name,
-    'email' => $email,
-];
+$toName = isset($data['to_name']) ? mb_substr(strip_tags((string) $data['to_name']), 0, 120) : '';
 
 // Only agents exposed by this widget
 $allowedAgents = get_allowed_agents();
-if (isset($data['agent_slug']) && in_array($data['agent_slug'], $allowedAgents, true)) {
-    $payload['agent_slug'] = $data['agent_slug'];
-}
+$agentSlug = (isset($data['agent_slug']) && in_array($data['agent_slug'], $allowedAgents, true))
+    ? $data['agent_slug']
+    : 'dr-yas';
 
-if (!empty($data['session_id'])) {
-    $sessionId = preg_replace('/[^A-Za-z0-9_\-]/', '', (string) $data['session_id']);
-    $sessionId = mb_substr($sessionId, 0, 64);
-    if ($sessionId !== '') {
-        $payload['session_id'] = $sessionId;
+$messages = [];
+if (isset($data['messages']) && is_array($data['messages'])) {
+    foreach (array_slice($data['messages'], -100) as $m) {
+        if (!is_array($m) || !isset($m['role'])) continue;
+        $role = $m['role'] === 'bot' ? 'bot' : 'user';
+        $messages[] = [
+            'role' => $role,
+            'text' => mb_substr(strip_tags((string) ($m['text'] ?? '')), 0, 4000),
+        ];
     }
 }
 
+$payload = [
+    'to_email'   => $toEmail,
+    'to_name'    => $toName,
+    'agent_slug' => $agentSlug,
+    'messages'   => $messages,
+];
+
 // Forward to the Python backend
-$ch = curl_init(DRYAS_BACKEND . '/leads');
+$ch = curl_init(DRYAS_BACKEND . '/send-transcript');
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_POST           => true,
     CURLOPT_POSTFIELDS     => json_encode($payload),
     CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
-    CURLOPT_TIMEOUT        => 30,
+    CURLOPT_TIMEOUT        => 60,
     CURLOPT_SSL_VERIFYPEER => true,
 ]);
 
