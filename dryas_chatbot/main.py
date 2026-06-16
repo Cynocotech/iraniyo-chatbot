@@ -30,19 +30,26 @@ import os, time, uuid, re, json, csv, io, smtplib, ssl, asyncio
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formataddr
+from email.mime.application import MIMEApplication
+from email.utils import formataddr, formatdate
 from typing import Optional
 from pathlib import Path
 
 import httpx
 import asyncpg
 from openai import AsyncOpenAI
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Cookie, Response, Request, Depends
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from agents import AGENTS, get_agent, list_agents, update_agent, reset_agent, reload_agents, delete_agent
+from admin_auth import authenticate_admin, generate_session_token
+from pdf_generator import generate_transcript_pdf, generate_transcript_filename
+from security import (
+    SecurityMiddleware, InputValidator, rate_limiter, audit_logger,
+    csrf_protection, SECURITY_HEADERS
+)
 
 load_dotenv()
 
@@ -71,6 +78,10 @@ class Config:
     SMTP_FROM_EMAIL: str   = os.getenv("SMTP_FROM_EMAIL", "")
     SMTP_FROM_NAME: str    = os.getenv("SMTP_FROM_NAME", "ایرانیو")
     SMTP_USE_TLS: bool     = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
+
+    # ── Iraniu Directory API ────────────────────────────────
+    DIRECTORY_API_KEY: str = os.getenv("DIRECTORY_API_KEY", "bd9a3134145e08761a65025ab204f27167bd91c1ec85276b995f17ad77734f52")
+    DIRECTORY_API_URL: str = os.getenv("DIRECTORY_API_URL", "https://directory.iraniu.uk/chatbot/v1")
 
 
 cfg = Config()
@@ -186,9 +197,52 @@ async def get_pg():
                     session_id TEXT
                 )
             """)
+            await _pg_pool.execute("""
+                CREATE TABLE IF NOT EXISTS iraniano_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
         except Exception as e:
             print(f"[Postgres] Connection failed: {e}")
     return _pg_pool
+
+async def load_config_from_db():
+    """Load configuration from database and update cfg object"""
+    pool = await get_pg()
+    if pool:
+        try:
+            rows = await pool.fetch("SELECT key, value FROM iraniano_config")
+            for row in rows:
+                key = row["key"]
+                value = row["value"]
+                if hasattr(cfg, key):
+                    # Convert to appropriate type
+                    if key in ["SCORE_THRESHOLD"]:
+                        value = float(value)
+                    elif key in ["TOP_K", "MAX_HISTORY", "SMTP_PORT"]:
+                        value = int(value)
+                    elif key == "SMTP_USE_TLS":
+                        value = value.lower() == "true"
+                    setattr(cfg, key, value)
+            print(f"[Config] Loaded {len(rows)} settings from database")
+        except Exception as e:
+            print(f"[Config] Failed to load from database: {e}")
+
+async def save_config_to_db(key: str, value):
+    """Save a single config value to database"""
+    pool = await get_pg()
+    if pool:
+        try:
+            await pool.execute(
+                """INSERT INTO iraniano_config (key, value, updated_at)
+                   VALUES ($1, $2, NOW())
+                   ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()""",
+                key, str(value)
+            )
+        except Exception as e:
+            print(f"[Config] Failed to save {key} to database: {e}")
 
 async def load_history(session_id: str, agent_slug: str) -> list[dict]:
     pool = await get_pg()
@@ -218,6 +272,60 @@ async def save_turn(session_id: str, agent_slug: str, user_msg: str, assistant_m
             )
     except Exception as e:
         print(f"[Postgres] save_turn failed: {e}")
+
+# ─────────────────────────────────────────
+# Iraniu Directory API helpers
+# ─────────────────────────────────────────
+async def directory_get_categories() -> list[dict]:
+    """Fetch all business categories from the Directory API"""
+    headers = {"X-Api-Key": cfg.DIRECTORY_API_KEY}
+    url = f"{cfg.DIRECTORY_API_URL}/categories"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            return r.json().get("categories", [])
+    except Exception as e:
+        print(f"[Directory] Failed to fetch categories: {e}")
+        return []
+
+async def directory_search_businesses(category: Optional[str] = None,
+                                     city: Optional[str] = None,
+                                     query: Optional[str] = None,
+                                     limit: int = 10,
+                                     offset: int = 0) -> dict:
+    """Search businesses in the Directory API"""
+    headers = {"X-Api-Key": cfg.DIRECTORY_API_KEY}
+    url = f"{cfg.DIRECTORY_API_URL}/businesses"
+    params = {"limit": limit, "offset": offset}
+    if category:
+        params["category"] = category
+    if city:
+        params["city"] = city
+    if query:
+        params["q"] = query
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers, params=params)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        print(f"[Directory] Failed to search businesses: {e}")
+        return {"total": 0, "results": []}
+
+async def directory_get_business(slug: str) -> Optional[dict]:
+    """Get full details for a specific business"""
+    headers = {"X-Api-Key": cfg.DIRECTORY_API_KEY}
+    url = f"{cfg.DIRECTORY_API_URL}/businesses/{slug}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        print(f"[Directory] Failed to fetch business {slug}: {e}")
+        return None
 
 # ─────────────────────────────────────────
 # RAG pipeline (Dr. Yas only)
@@ -266,22 +374,183 @@ def build_context(results: list[dict]) -> tuple[str, list[dict]]:
 # ─────────────────────────────────────────
 # Gemini generation
 # ─────────────────────────────────────────
-async def call_gemini(system: str, messages: list[dict], max_tokens: int = 2048) -> str:
+# Define Directory API function calling tools for Gemini
+DIRECTORY_API_TOOLS = [{
+    "function_declarations": [
+        {
+            "name": "get_directory_categories",
+            "description": "Fetch all available business categories from the Iranian Business Directory",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
+            "name": "search_directory_businesses",
+            "description": "Search for Iranian businesses in the UK directory. Returns list of businesses with details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Farsi category name (e.g. 'رستوران', 'آرایشگاه'). Must match exact category from get_directory_categories."
+                    },
+                    "city": {
+                        "type": "string",
+                        "description": "City name for partial match (e.g. 'London', 'Manchester', 'Birmingham')"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Keyword search query (searches in business name and description)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 10)",
+                        "default": 10
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Pagination offset (default: 0)",
+                        "default": 0
+                    }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "get_directory_business_details",
+            "description": "Get full details for a specific business by its slug",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "description": "The unique slug/ID of the business"
+                    }
+                },
+                "required": ["slug"]
+            }
+        }
+    ]
+}]
+
+async def execute_directory_function(func_name: str, args: dict) -> dict:
+    """Execute a Directory API function call and return results"""
+    try:
+        if func_name == "get_directory_categories":
+            categories = await directory_get_categories()
+            return {"success": True, "categories": categories}
+
+        elif func_name == "search_directory_businesses":
+            result = await directory_search_businesses(
+                category=args.get("category"),
+                city=args.get("city"),
+                query=args.get("query"),
+                limit=args.get("limit", 10),
+                offset=args.get("offset", 0)
+            )
+            return {"success": True, "result": result}
+
+        elif func_name == "get_directory_business_details":
+            business = await directory_get_business(args.get("slug"))
+            if business:
+                return {"success": True, "business": business}
+            else:
+                return {"success": False, "error": "Business not found"}
+
+        else:
+            return {"success": False, "error": f"Unknown function: {func_name}"}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+async def call_gemini(system: str, messages: list[dict], max_tokens: int = 2048,
+                     use_directory_tools: bool = False) -> str:
+    """
+    Call Gemini API with optional Directory API function calling support.
+    If use_directory_tools=True, enables iterative function calling loop.
+    """
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{cfg.GEMINI_MODEL}:generateContent?key={cfg.GEMINI_API_KEY}")
+
     contents = []
     for m in messages:
         role = "user" if m["role"] == "user" else "model"
         contents.append({"role": role, "parts": [{"text": m["content"]}]})
+
     body = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": contents,
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": max_tokens}
     }
+
+    # Add Directory API tools if requested
+    if use_directory_tools:
+        body["tools"] = DIRECTORY_API_TOOLS
+        print(f"[Gemini] Enabling Directory API tools for this request")
+
     async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(url, json=body)
-        r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        max_iterations = 5  # Prevent infinite loops
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            r = await client.post(url, json=body)
+            r.raise_for_status()
+            response_data = r.json()
+
+            if use_directory_tools:
+                print(f"[Gemini] Response keys: {list(response_data.keys())}")
+                print(f"[Gemini] Candidates: {len(response_data.get('candidates', []))}")
+
+            candidate = response_data["candidates"][0]
+            content = candidate["content"]
+
+            if use_directory_tools:
+                print(f"[Gemini] Content parts: {content.get('parts', [])}")
+
+            # Check if there's a function call
+            function_call = None
+            text_response = None
+
+            for part in content.get("parts", []):
+                if "functionCall" in part:
+                    function_call = part["functionCall"]
+                if "text" in part:
+                    text_response = part["text"]
+
+            # If no function call, return the text response
+            if not function_call:
+                return text_response or ""
+
+            # Execute the function call
+            func_name = function_call["name"]
+            func_args = function_call.get("args", {})
+
+            print(f"[Gemini] Function call: {func_name}({func_args})")
+            func_result = await execute_directory_function(func_name, func_args)
+
+            # Add the function call and response to the conversation
+            contents.append({
+                "role": "model",
+                "parts": [{"functionCall": function_call}]
+            })
+            contents.append({
+                "role": "function",
+                "parts": [{
+                    "functionResponse": {
+                        "name": func_name,
+                        "response": func_result
+                    }
+                }]
+            })
+
+            # Update body for next iteration
+            body["contents"] = contents
+
+        # If we hit max iterations, return whatever we have
+        return "متأسفم، نتوانستم پاسخ مناسبی تولید کنم. لطفاً دوباره تلاش کنید."
 
 # ─────────────────────────────────────────
 # Post-processing
@@ -370,7 +639,13 @@ async def run_pipeline(user_message: str, session_id: str, agent_slug: str,
         messages = list(history)
         messages.append({"role": "user", "content": user_message})
 
-        raw = await call_gemini(system, messages, max_tokens=getattr(agent, "max_output_tokens", 2048))
+        # Enable Directory API function calling if agent supports it
+        use_directory_tools = getattr(agent, "directory_enabled", False)
+        print(f"[Pipeline] Agent: {agent_slug}, directory_enabled={use_directory_tools}")
+
+        raw = await call_gemini(system, messages,
+                               max_tokens=getattr(agent, "max_output_tokens", 2048),
+                               use_directory_tools=use_directory_tools)
         clean = clean_html(raw)
         final = append_share_links(clean, share_links)
 
@@ -396,9 +671,29 @@ async def run_pipeline(user_message: str, session_id: str, agent_slug: str,
         raise
 
 # ─────────────────────────────────────────
+# Admin Authentication
+# ─────────────────────────────────────────
+# Store active sessions: token -> username
+active_sessions: dict[str, str] = {}
+
+def verify_admin_session(admin_session: Optional[str] = Cookie(None)):
+    """Dependency to verify admin session cookie"""
+    if not admin_session or admin_session not in active_sessions:
+        raise HTTPException(401, "Unauthorized - Please login")
+    return active_sessions[admin_session]
+
+# ─────────────────────────────────────────
 # FastAPI app
 # ─────────────────────────────────────────
-app = FastAPI(title="Iraniano Multi-Agent Chatbot", version="2.0")
+app = FastAPI(
+    title="Iraniano Multi-Agent Chatbot",
+    version="2.0",
+    docs_url=None,  # Disable Swagger docs in production
+    redoc_url=None,  # Disable ReDoc in production
+)
+
+# 🔒 Add security middleware
+app.add_middleware(SecurityMiddleware, max_request_size=1_000_000)  # 1MB limit
 
 _BASE_DIR = Path(__file__).resolve().parent
 
@@ -413,6 +708,9 @@ async def startup_checks():
         print(f"[Startup] templates/{name}: {'OK' if exists else 'MISSING'}")
     print(f"[Startup] Agents loaded: {list(AGENTS.keys())}")
     print(f"[Startup] Gemini key set: {bool(cfg.GEMINI_API_KEY)}")
+    # Load config from database (overrides .env values)
+    await load_config_from_db()
+    print(f"[Startup] Config loaded from database")
 
 # ── Public: agent list ─────────────────────────────────────
 @app.get("/agents")
@@ -420,7 +718,9 @@ async def public_agents():
     return [{"slug": a.slug, "name": a.name, "icon": a.icon,
              "description": a.description, "chips": a.chips,
              "welcome_message": a.welcome_message,
-             "use_client_history": a.use_client_history}
+             "use_client_history": a.use_client_history,
+             "directory_enabled": a.directory_enabled,
+             "directory_categories": a.directory_categories}
             for a in list_agents()]
 
 # ── Public: agent selector UI ─────────────────────────────
@@ -450,23 +750,131 @@ class ChatRequest(BaseModel):
     user_email: Optional[str] = None
 
 @app.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
+    # 🔒 Get client IP
+    ip = request.client.host if request.client else "unknown"
+
+    # 🔒 Input validation
     if not req.message.strip():
         raise HTTPException(400, "Empty message")
-    session_id = req.session_id or f"web_{uuid.uuid4().hex[:12]}"
+
+    # 🔒 Sanitize and validate inputs (with attack detection)
     try:
-        answer = await run_pipeline(req.message, session_id, req.agent_slug,
+        message = InputValidator.sanitize_text(req.message, InputValidator.MAX_MESSAGE_LENGTH, ip=ip)
+    except HTTPException as e:
+        # Attack detected - already logged and IP blocked
+        raise e
+
+    if req.user_name:
+        req.user_name = InputValidator.sanitize_name(req.user_name)
+
+    if req.user_email and not InputValidator.validate_email(req.user_email):
+        raise HTTPException(400, "Invalid email format")
+
+    if not InputValidator.validate_slug(req.agent_slug):
+        raise HTTPException(400, "Invalid agent slug")
+
+    session_id = req.session_id or f"web_{uuid.uuid4().hex[:12]}"
+
+    # 🔒 Audit log
+    audit_logger.log_event("chat_request", {
+        "agent": req.agent_slug,
+        "session": session_id,
+        "message_length": len(message)
+    }, ip=ip, severity="info")
+
+    try:
+        answer = await run_pipeline(message, session_id, req.agent_slug,
                                     client_history=req.client_history,
                                     user_name=req.user_name, user_email=req.user_email)
         return {"answer": answer, "session_id": session_id, "agent_slug": req.agent_slug}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        audit_logger.log_event("chat_error", {
+            "agent": req.agent_slug,
+            "error": str(e)[:200]
+        }, ip=ip, severity="high")
+        raise HTTPException(500, "Internal server error")
+
+# ── Admin: Login endpoint ─────────────────────────────────
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/admin/login")
+async def admin_login(req: LoginRequest, response: Response, request: Request):
+    # 🔒 Get client IP
+    ip = request.client.host if request.client else "unknown"
+
+    # 🔒 Validate input
+    if not req.username or not req.password:
+        raise HTTPException(400, "Username and password required")
+
+    # Sanitize username (prevent injection)
+    username = InputValidator.sanitize_name(req.username)
+
+    # Authenticate
+    user = authenticate_admin(username, req.password)
+
+    if not user:
+        # 🔒 Record failed login attempt
+        is_blocked = rate_limiter.record_failed_login(ip)
+
+        # 🔒 Audit log
+        audit_logger.log_event("failed_login", {
+            "username": username,
+            "blocked": is_blocked
+        }, ip=ip, severity="high" if is_blocked else "medium")
+
+        if is_blocked:
+            raise HTTPException(429, "Too many failed login attempts. Account locked for 15 minutes.")
+
+        raise HTTPException(401, "Invalid username or password")
+
+    # 🔒 Clear failed attempts on successful login
+    rate_limiter.clear_login_attempts(ip)
+
+    # Generate session token
+    session_token = generate_session_token()
+    active_sessions[session_token] = username
+
+    # 🔒 Audit log successful login
+    audit_logger.log_event("successful_login", {
+        "username": username
+    }, ip=ip, severity="info")
+
+    # Set cookie (7 days expiry)
+    response.set_cookie(
+        key="admin_session",
+        value=session_token,
+        max_age=7 * 24 * 60 * 60,  # 7 days
+        httponly=True,
+        secure=True,  # HTTPS only
+        samesite="lax"
+    )
+
+    return {"success": True, "username": username, "full_name": user.get("full_name", "")}
+
+# ── Admin: Logout endpoint ─────────────────────────────────
+@app.post("/admin/logout")
+async def admin_logout(response: Response, admin_session: Optional[str] = Cookie(None)):
+    if admin_session and admin_session in active_sessions:
+        del active_sessions[admin_session]
+
+    # Clear cookie
+    response.delete_cookie("admin_session")
+    return {"success": True}
 
 # ── Admin: panel UI ────────────────────────────────────────
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_ui():
+async def admin_ui(admin_session: Optional[str] = Cookie(None)):
+    # Check if user is logged in
+    if not admin_session or admin_session not in active_sessions:
+        # Return login page
+        return HTMLResponse(read_template("login.html"))
+
+    # User is authenticated, return admin panel
     return HTMLResponse(read_template("admin.html"))
 
 # ── Admin: create new agent ────────────────────────────────
@@ -480,6 +888,8 @@ class AgentCreate(BaseModel):
     chips: list[str] = []
     enabled: bool = True
     rag_enabled: bool = False
+    directory_enabled: bool = False
+    directory_categories: list[str] = []
 
 def generate_agent_code(data: AgentCreate) -> str:
     """Generates the Python code for a new agent file."""
@@ -488,6 +898,7 @@ def generate_agent_code(data: AgentCreate) -> str:
         raise ValueError("Invalid slug. Use only lowercase letters, numbers, and hyphens.")
 
     chips_str = (",\n    ").join([repr(c) for c in data.chips])
+    dir_cats_str = ", ".join([repr(c) for c in data.directory_categories])
 
     # Escape triple quotes in system prompt to avoid breaking the string literal
     safe_prompt = data.system_prompt.replace('"""', '\\"\\"\\"')
@@ -504,6 +915,8 @@ icon              = {repr(data.icon)}
 description       = {repr(data.description)}
 enabled           = {repr(data.enabled)}
 rag_enabled       = {repr(data.rag_enabled)}
+directory_enabled = {repr(data.directory_enabled)}
+directory_categories = [{dir_cats_str}]
 max_output_tokens = 2048
 followup_enrichment = True
 use_client_history  = False
@@ -520,7 +933,7 @@ system_prompt = """{safe_prompt}"""
 '''
 
 @app.post("/admin/agents", status_code=201)
-async def admin_create_agent(body: AgentCreate):
+async def admin_create_agent(body: AgentCreate, username: str = Depends(verify_admin_session)):
     slug = re.sub(r'[^a-z0-9\-]', '', body.slug.lower())
     if not slug:
         raise HTTPException(400, "Invalid slug. Use only lowercase letters, numbers, and hyphens.")
@@ -537,7 +950,7 @@ async def admin_create_agent(body: AgentCreate):
 
 # ── Admin: list all agents ─────────────────────────────────
 @app.get("/admin/agents")
-async def admin_list_agents():
+async def admin_list_agents(username: str = Depends(verify_admin_session)):
     return [a.to_dict() for a in list_agents(include_disabled=True)]
 
 # ── Admin: update agent ────────────────────────────────────
@@ -549,9 +962,11 @@ class AgentUpdate(BaseModel):
     welcome_message: Optional[str]       = None
     chips:           Optional[list[str]] = None
     enabled:         Optional[bool]      = None
+    directory_enabled: Optional[bool]    = None
+    directory_categories: Optional[list[str]] = None
 
 @app.post("/admin/agents/{slug}")
-async def admin_update_agent(slug: str, body: AgentUpdate):
+async def admin_update_agent(slug: str, body: AgentUpdate, username: str = Depends(verify_admin_session)):
     agent = update_agent(slug, **{k: v for k, v in body.model_dump().items()
                                    if v is not None})
     if not agent:
@@ -560,7 +975,7 @@ async def admin_update_agent(slug: str, body: AgentUpdate):
 
 # ── Admin: reset agent to default ─────────────────────────
 @app.post("/admin/agents/{slug}/reset")
-async def admin_reset_agent(slug: str):
+async def admin_reset_agent(slug: str, username: str = Depends(verify_admin_session)):
     agent = reset_agent(slug)
     if not agent:
         raise HTTPException(404, f"Agent '{slug}' not found or no default available")
@@ -575,7 +990,7 @@ async def admin_delete_agent(slug: str):
 
 # ── Admin: global config ───────────────────────────────────
 @app.get("/admin/config")
-async def get_config():
+async def get_config(username: str = Depends(verify_admin_session)):
     return {
         "QDRANT_URL":        cfg.QDRANT_URL,
         "QDRANT_COLLECTION": cfg.QDRANT_COLLECTION,
@@ -595,6 +1010,8 @@ async def get_config():
         "SMTP_FROM_NAME":    cfg.SMTP_FROM_NAME,
         "SMTP_USE_TLS":      cfg.SMTP_USE_TLS,
         "SMTP_PASSWORD":     ("***" + cfg.SMTP_PASSWORD[-4:]) if cfg.SMTP_PASSWORD else "",
+        "DIRECTORY_API_KEY": ("***" + cfg.DIRECTORY_API_KEY[-4:]) if cfg.DIRECTORY_API_KEY else "",
+        "DIRECTORY_API_URL": cfg.DIRECTORY_API_URL,
     }
 
 class ConfigUpdate(BaseModel):
@@ -616,20 +1033,24 @@ class ConfigUpdate(BaseModel):
     SMTP_FROM_EMAIL:   Optional[str]       = None
     SMTP_FROM_NAME:    Optional[str]       = None
     SMTP_USE_TLS:      Optional[bool]      = None
+    DIRECTORY_API_KEY: Optional[str]       = None
+    DIRECTORY_API_URL: Optional[str]       = None
 
 @app.post("/admin/config")
-async def update_config(body: ConfigUpdate):
+async def update_config(body: ConfigUpdate, username: str = Depends(verify_admin_session)):
     for attr in ["QDRANT_URL","QDRANT_COLLECTION","EMBED_MODEL","GEMINI_MODEL",
                  "SCORE_THRESHOLD","TOP_K","MAX_HISTORY","APP_BASE_URL",
                  "SMTP_HOST","SMTP_PORT","SMTP_USER","SMTP_FROM_EMAIL",
-                 "SMTP_FROM_NAME","SMTP_USE_TLS"]:
+                 "SMTP_FROM_NAME","SMTP_USE_TLS","DIRECTORY_API_URL"]:
         val = getattr(body, attr)
         if val is not None:
             setattr(cfg, attr, val)
-    for attr in ("OPENAI_API_KEY","GEMINI_API_KEY","QDRANT_API_KEY","SMTP_PASSWORD"):
+            await save_config_to_db(attr, val)
+    for attr in ("OPENAI_API_KEY","GEMINI_API_KEY","QDRANT_API_KEY","SMTP_PASSWORD","DIRECTORY_API_KEY"):
         val = getattr(body, attr)
         if val and not val.startswith("***"):
             setattr(cfg, attr, val)
+            await save_config_to_db(attr, val)
     return {"status": "ok"}
 
 # ── Admin: run log ─────────────────────────────────────────
@@ -668,7 +1089,7 @@ async def get_runs(limit: int = 100):
 
 # ── Admin: export run log (Q&A) as CSV ─────────────────────
 @app.get("/admin/runs.csv")
-async def export_runs_csv():
+async def export_runs_csv(username: str = Depends(verify_admin_session)):
     rows = await fetch_run_log(10000)
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -684,7 +1105,7 @@ async def export_runs_csv():
 
 # ── Admin: export collected user leads (name/email) as CSV ─
 @app.get("/admin/leads.csv")
-async def export_leads_csv():
+async def export_leads_csv(username: str = Depends(verify_admin_session)):
     pool = await get_pg()
     if pool:
         try:
@@ -758,59 +1179,46 @@ _LOGO_URL = "https://panel.cybercina.co.uk//storage/logos/N0yQlVchcj4ucrQfVJwbXX
 def build_transcript_email_html(to_name: str, agent_name: str, messages: list[dict]) -> str:
     import html as html_lib
 
-    rows = []
-    for m in messages:
-        text = html_lib.escape(str(m.get("text", "")).strip()).replace("\n", "<br>")
-        if not text:
-            continue
-        if m.get("role") == "user":
-            rows.append(f'''
-            <tr><td style="padding:6px 0;text-align:left;">
-              <div style="display:inline-block;max-width:80%;background:#612a80;color:#f8fafc;
-                          border-radius:14px;padding:10px 14px;font-size:13.5px;line-height:1.8;text-align:right">
-                {text}
-              </div>
-            </td></tr>''')
-        else:
-            rows.append(f'''
-            <tr><td style="padding:6px 0;text-align:right;">
-              <div style="display:inline-block;max-width:80%;background:#334155;color:#f8fafc;
-                          border-radius:14px;padding:10px 14px;font-size:13.5px;line-height:1.8;
-                          text-align:right;border:1px solid rgba(255,255,255,.08)">
-                {text}
-              </div>
-            </td></tr>''')
-
-    transcript_html = "".join(rows) or (
-        '<tr><td style="color:#94a3b8;font-size:13px;text-align:center">گفتگویی ثبت نشده است.</td></tr>'
-    )
     greeting_name = f"{html_lib.escape(to_name)} عزیز" if to_name else "کاربر گرامی"
     agent_name_safe = html_lib.escape(agent_name)
+    message_count = len(messages)
 
+    # Short email body (full transcript is in PDF)
     return f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#060b14;font-family:Tahoma,'Segoe UI',Arial,sans-serif;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#060b14;padding:24px 0;">
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+</head>
+<body style="margin:0;padding:0;background:#060b14;font-family:Tahoma,Arial,sans-serif;direction:rtl;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#060b14;padding:24px 0;direction:rtl;">
     <tr><td align="center">
       <table role="presentation" width="100%" style="max-width:600px;background:rgba(8,14,26,0.92);border-radius:16px;
-                  overflow:hidden;border:1px solid rgba(255,255,255,.1)">
-        <tr><td style="padding:28px 24px;text-align:center;background:linear-gradient(135deg,#612a80,#79359e)">
-          <img src="{_LOGO_URL}" alt="ایرانیو" width="180" height="60" style="border-radius:10px;background:#fff;padding:8px 16px;display:inline-block">
-          <h1 style="color:#f8fafc;font-size:18px;margin:14px 0 0;font-weight:700">دستیار هوشمند ایرانیو</h1>
+                  overflow:hidden;border:1px solid rgba(255,255,255,.1);direction:rtl;">
+        <tr><td style="padding:28px 24px;text-align:center;background:linear-gradient(135deg,#612a80,#79359e);direction:rtl;">
+          <img src="{_LOGO_URL}" alt="ایرانیو" width="180" height="60" style="border-radius:10px;padding:8px 16px;display:block;margin:0 auto;max-width:100%;height:auto;">
+          <h1 style="color:#f8fafc;font-size:18px;margin:14px 0 0;font-weight:700;font-family:Tahoma,Arial,sans-serif;direction:rtl;">دستیار هوشمند ایرانیو</h1>
         </td></tr>
-        <tr><td style="padding:24px;color:#f8fafc">
-          <p style="font-size:15px;line-height:1.9;margin:0 0 14px">سلام {greeting_name} 👋</p>
-          <p style="font-size:13.5px;line-height:1.9;color:#94a3b8;margin:0 0 22px">
-            از اینکه از دستیار هوشمند ایرانیو ({agent_name_safe}) استفاده کردید سپاسگزاریم.
-            خلاصه گفتگوی شما در زیر آمده است.
-          </p>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{transcript_html}</table>
-          <p style="font-size:12.5px;line-height:1.9;color:#94a3b8;margin-top:24px">
-            در صورت نیاز به مشاوره بیشتر، هر زمان می‌توانید دوباره به ایرانیو مراجعه کنید.
+        <tr><td style="padding:40px 24px;color:#f8fafc;direction:rtl;font-family:Tahoma,Arial,sans-serif;text-align:right;">
+          <p style="font-size:16px;line-height:1.9;margin:0 0 25px;direction:rtl;">سلام {greeting_name} 👋</p>
+
+          <div style="background:rgba(97,42,128,0.15);border-right:4px solid #612a80;padding:20px;border-radius:8px;margin:0 0 25px;">
+            <p style="font-size:15px;line-height:1.9;color:#e8eaf0;margin:0 0 15px;direction:rtl;font-weight:600;">
+              گفتگوی شما آماده است! 📄
+            </p>
+            <p style="font-size:14px;line-height:1.9;color:#cbd5e1;margin:0;direction:rtl;">
+              فایل PDF حاوی {message_count} پیام از گفتگو با {agent_name_safe} ضمیمه این ایمیل است.
+            </p>
+          </div>
+
+          <p style="font-size:13px;line-height:1.9;color:#94a3b8;margin:0;direction:rtl;">
+            از اینکه از دستیار هوشمند ایرانیو استفاده کردید سپاسگزاریم. 💜
           </p>
         </td></tr>
-        <tr><td style="padding:16px;text-align:center;font-size:11px;color:#94a3b8;border-top:1px solid rgba(255,255,255,.1)">
-          © {datetime.now().year} ایرانیو — تمامی حقوق محفوظ است
+        <tr><td style="padding:20px;text-align:center;font-size:11px;color:#94a3b8;border-top:1px solid rgba(255,255,255,.1);direction:rtl;font-family:Tahoma,Arial,sans-serif;">
+          <p style="margin:0 0 8px;">https://iraniu.uk</p>
+          <p style="margin:0;">© {datetime.now().year} ایرانیو — تمامی حقوق محفوظ است</p>
         </td></tr>
       </table>
     </td></tr>
@@ -822,10 +1230,33 @@ def _send_email_sync(to_email: str, to_name: str, subject: str, html_body: str):
     if not cfg.SMTP_HOST or not cfg.SMTP_USER or not cfg.SMTP_PASSWORD:
         raise RuntimeError("SMTP is not configured")
 
+    # Create plain text version for better deliverability
+    import re
+    text_body = re.sub('<[^<]+?>', '', html_body)  # Strip HTML tags
+    text_body = re.sub(r'\s+', ' ', text_body).strip()  # Clean whitespace
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = formataddr((cfg.SMTP_FROM_NAME or "Iraniyo", cfg.SMTP_FROM_EMAIL or cfg.SMTP_USER))
     msg["To"] = formataddr((to_name or "", to_email))
+    msg["Reply-To"] = cfg.SMTP_FROM_EMAIL or cfg.SMTP_USER
+
+    # Anti-spam headers
+    msg["Message-ID"] = f"<{uuid.uuid4()}@{cfg.SMTP_FROM_EMAIL.split('@')[1] if '@' in str(cfg.SMTP_FROM_EMAIL) else 'iraniu.uk'}>"
+    msg["Date"] = formatdate(localtime=True)
+    msg["MIME-Version"] = "1.0"
+    msg["Content-Language"] = "fa"
+    msg["X-Mailer"] = "Iraniyo Chatbot"
+    msg["X-Priority"] = "3"
+    msg["Importance"] = "Normal"
+
+    # List-Unsubscribe header (required for bulk emails)
+    msg["List-Unsubscribe"] = f"<mailto:{cfg.SMTP_FROM_EMAIL}?subject=unsubscribe>"
+    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
+    # Attach plain text first (best practice)
+    msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    # Then HTML
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP(cfg.SMTP_HOST, cfg.SMTP_PORT, timeout=20) as server:
@@ -837,6 +1268,61 @@ def _send_email_sync(to_email: str, to_name: str, subject: str, html_body: str):
 
 async def send_email_smtp(to_email: str, to_name: str, subject: str, html_body: str):
     await asyncio.to_thread(_send_email_sync, to_email, to_name, subject, html_body)
+
+
+def _send_email_with_pdf_sync(to_email: str, to_name: str, subject: str, html_body: str,
+                               pdf_bytes: Optional[bytes] = None, pdf_filename: Optional[str] = None):
+    """Send email with optional PDF attachment"""
+    if not cfg.SMTP_HOST or not cfg.SMTP_USER or not cfg.SMTP_PASSWORD:
+        raise RuntimeError("SMTP is not configured")
+
+    # Create plain text version
+    import re
+    text_body = re.sub('<[^<]+?>', '', html_body)
+    text_body = re.sub(r'\s+', ' ', text_body).strip()
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"] = formataddr((cfg.SMTP_FROM_NAME or "Iraniyo", cfg.SMTP_FROM_EMAIL or cfg.SMTP_USER))
+    msg["To"] = formataddr((to_name or "", to_email))
+    msg["Reply-To"] = cfg.SMTP_FROM_EMAIL or cfg.SMTP_USER
+
+    # Anti-spam headers
+    msg["Message-ID"] = f"<{uuid.uuid4()}@{cfg.SMTP_FROM_EMAIL.split('@')[1] if '@' in str(cfg.SMTP_FROM_EMAIL) else 'iraniu.uk'}>"
+    msg["Date"] = formatdate(localtime=True)
+    msg["MIME-Version"] = "1.0"
+    msg["Content-Language"] = "fa"
+    msg["X-Mailer"] = "Iraniyo Chatbot"
+    msg["X-Priority"] = "3"
+    msg["Importance"] = "Normal"
+    msg["List-Unsubscribe"] = f"<mailto:{cfg.SMTP_FROM_EMAIL}?subject=unsubscribe>"
+    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
+    # Create alternative part for text and HTML
+    msg_alternative = MIMEMultipart("alternative")
+    msg_alternative.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg_alternative.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(msg_alternative)
+
+    # Attach PDF if provided
+    if pdf_bytes and pdf_filename:
+        pdf_attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+        pdf_attachment.add_header('Content-Disposition', 'attachment', filename=pdf_filename)
+        pdf_attachment.add_header('Content-Type', 'application/pdf', name=pdf_filename)
+        msg.attach(pdf_attachment)
+
+    with smtplib.SMTP(cfg.SMTP_HOST, cfg.SMTP_PORT, timeout=20) as server:
+        if cfg.SMTP_USE_TLS:
+            server.starttls(context=ssl.create_default_context())
+        server.login(cfg.SMTP_USER, cfg.SMTP_PASSWORD)
+        server.sendmail(cfg.SMTP_FROM_EMAIL or cfg.SMTP_USER, [to_email], msg.as_string())
+
+
+async def send_email_with_pdf(to_email: str, to_name: str, subject: str, html_body: str,
+                               pdf_bytes: Optional[bytes] = None, pdf_filename: Optional[str] = None):
+    """Async wrapper for sending email with PDF"""
+    await asyncio.to_thread(_send_email_with_pdf_sync, to_email, to_name, subject, html_body,
+                           pdf_bytes, pdf_filename)
 
 
 class TranscriptMessage(BaseModel):
@@ -852,25 +1338,89 @@ class SendTranscriptRequest(BaseModel):
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 @app.post("/send-transcript")
-async def send_transcript(body: SendTranscriptRequest):
-    if not _EMAIL_RE.match(body.to_email):
+async def send_transcript(body: SendTranscriptRequest, request: Request):
+    # 🔒 Input validation
+    if not InputValidator.validate_email(body.to_email):
         raise HTTPException(400, "Invalid email address")
+
+    if not InputValidator.validate_slug(body.agent_slug):
+        raise HTTPException(400, "Invalid agent slug")
+
     if not cfg.SMTP_HOST or not cfg.SMTP_USER or not cfg.SMTP_PASSWORD:
         raise HTTPException(503, "Email sending is not configured")
 
+    # 🔒 Sanitize inputs to prevent email header injection
+    to_email = InputValidator.sanitize_email_header(body.to_email)
+    to_name = InputValidator.sanitize_email_header(body.to_name or "")
+
+    # Limit number of messages
+    if len(body.messages) > 500:
+        raise HTTPException(400, "Too many messages (max 500)")
+
+    # 🔒 Audit log
+    ip = request.client.host if request.client else "unknown"
+    audit_logger.log_event("transcript_request", {
+        "to_email": to_email[:20] + "...",  # Partial email for privacy
+        "agent": body.agent_slug,
+        "message_count": len(body.messages)
+    }, ip=ip, severity="info")
+
     agent = get_agent(body.agent_slug)
     agent_name = agent.name if agent else body.agent_slug
-    html_body = build_transcript_email_html(
-        body.to_name or "", agent_name, [m.model_dump() for m in body.messages]
-    )
+    messages_dict = [m.model_dump() for m in body.messages]
+
+    # Generate HTML for email
+    html_body = build_transcript_email_html(to_name, agent_name, messages_dict)
+
+    # Generate PDF attachment
     try:
-        await send_email_smtp(
-            body.to_email, body.to_name or "",
-            "خلاصه گفتگوی شما با دستیار هوشمند ایرانیو", html_body,
+        pdf_bytes = await asyncio.to_thread(
+            generate_transcript_pdf, to_name, agent_name, messages_dict
+        )
+        pdf_filename = generate_transcript_filename(to_name or "user", agent_name)
+    except Exception as e:
+        print(f"[PDF] Generation failed: {e}")
+        audit_logger.log_event("pdf_generation_error", {
+            "error": str(e)[:200]
+        }, ip=ip, severity="medium")
+        pdf_bytes = None
+        pdf_filename = None
+
+    try:
+        await send_email_with_pdf(
+            to_email, to_name,
+            "خلاصه گفتگوی شما با دستیار هوشمند ایرانیو",
+            html_body, pdf_bytes, pdf_filename
         )
     except Exception as e:
-        raise HTTPException(500, f"Failed to send email: {e}")
+        audit_logger.log_event("email_send_error", {
+            "error": str(e)[:200]
+        }, ip=ip, severity="high")
+        raise HTTPException(500, "Failed to send email")
     return {"status": "sent"}
+
+@app.post("/download-transcript-pdf")
+async def download_transcript_pdf(body: SendTranscriptRequest):
+    """Download transcript as PDF without sending email"""
+    agent = get_agent(body.agent_slug)
+    agent_name = agent.name if agent else body.agent_slug
+    messages_dict = [m.model_dump() for m in body.messages]
+
+    try:
+        pdf_bytes = await asyncio.to_thread(
+            generate_transcript_pdf, body.to_name or "", agent_name, messages_dict
+        )
+        pdf_filename = generate_transcript_filename(body.to_name or "user", agent_name)
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{pdf_filename}"'
+            }
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate PDF: {e}")
 
 # ── Leads (pre-chat name/email capture) ─────────────────────
 class LeadRequest(BaseModel):
@@ -880,15 +1430,28 @@ class LeadRequest(BaseModel):
     session_id: Optional[str] = None
 
 @app.post("/leads")
-async def create_lead(body: LeadRequest):
-    name = body.name.strip()[:100]
+async def create_lead(body: LeadRequest, request: Request):
+    # 🔒 Input validation
+    name = InputValidator.sanitize_name(body.name)
     email = body.email.strip()
-    if not name or not _EMAIL_RE.match(email):
+
+    if not name or not InputValidator.validate_email(email):
         raise HTTPException(400, "Invalid name or email")
+
+    if body.agent_slug and not InputValidator.validate_slug(body.agent_slug):
+        raise HTTPException(400, "Invalid agent slug")
+
+    # 🔒 Audit log
+    ip = request.client.host if request.client else "unknown"
+    audit_logger.log_event("lead_capture", {
+        "agent": body.agent_slug or "unknown",
+        "email_domain": email.split('@')[1] if '@' in email else "unknown"
+    }, ip=ip, severity="info")
 
     pool = await get_pg()
     if pool:
         try:
+            # 🔒 Parameterized query prevents SQL injection
             await pool.execute(
                 "INSERT INTO iraniano_leads(name, email, agent_slug, session_id) VALUES($1,$2,$3,$4)",
                 name, email, body.agent_slug, body.session_id,
@@ -896,6 +1459,10 @@ async def create_lead(body: LeadRequest):
             return {"success": True}
         except Exception as e:
             print(f"[Postgres] create_lead failed, falling back to CSV: {e}")
+            audit_logger.log_event("database_error", {
+                "operation": "lead_insert",
+                "error": str(e)[:200]
+            }, ip=ip, severity="high")
 
     leads_file = _BASE_DIR.parent / "users.csv"
     is_new = not leads_file.exists() or leads_file.stat().st_size == 0
@@ -906,6 +1473,79 @@ async def create_lead(body: LeadRequest):
             writer.writerow(["date", "time", "name", "email"])
         writer.writerow([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), name, email])
     return {"success": True}
+
+# ── Security Dashboard (Admin only) ─────────────────────────
+@app.get("/admin/security/events")
+async def get_security_events(
+    limit: int = 100,
+    severity: Optional[str] = None,
+    username: str = Depends(verify_admin_session)
+):
+    """Get recent security events"""
+    events = audit_logger.get_recent_events(limit, severity)
+    return {"events": events, "count": len(events)}
+
+@app.get("/admin/security/blocked-ips")
+async def get_blocked_ips(username: str = Depends(verify_admin_session)):
+    """Get list of currently blocked IPs"""
+    now = time.time()
+    blocked = []
+    for ip, unblock_time in rate_limiter.blocked.items():
+        if unblock_time > now:
+            remaining = int(unblock_time - now)
+            blocked.append({
+                "ip": ip,
+                "unblock_in_seconds": remaining,
+                "unblock_at": datetime.fromtimestamp(unblock_time, tz=timezone.utc).isoformat()
+            })
+    return {"blocked_ips": blocked, "count": len(blocked)}
+
+@app.post("/admin/security/unblock-ip")
+async def unblock_ip(
+    body: dict,
+    username: str = Depends(verify_admin_session)
+):
+    """Manually unblock an IP address"""
+    ip = body.get("ip")
+    if not ip:
+        raise HTTPException(400, "IP address required")
+
+    if ip in rate_limiter.blocked:
+        del rate_limiter.blocked[ip]
+        audit_logger.log_event("manual_unblock", {
+            "ip": ip,
+            "admin": username
+        }, ip="admin", severity="info")
+        return {"status": "unblocked", "ip": ip}
+    else:
+        return {"status": "not_blocked", "ip": ip}
+
+# ── Directory API Proxy (for chatbot agents) ──────────────
+@app.get("/api/directory/categories")
+async def api_directory_categories():
+    """Public endpoint for agents to fetch business categories"""
+    categories = await directory_get_categories()
+    return {"categories": categories}
+
+@app.get("/api/directory/businesses")
+async def api_directory_businesses(
+    category: Optional[str] = None,
+    city: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0
+):
+    """Public endpoint for agents to search businesses"""
+    result = await directory_search_businesses(category, city, q, limit, offset)
+    return result
+
+@app.get("/api/directory/businesses/{slug}")
+async def api_directory_business_detail(slug: str):
+    """Public endpoint for agents to get full business details"""
+    business = await directory_get_business(slug)
+    if not business:
+        raise HTTPException(404, "Business not found")
+    return business
 
 # ── Health ─────────────────────────────────────────────────
 @app.get("/health")

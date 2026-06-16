@@ -51,6 +51,8 @@ class Agent:
     max_output_tokens: int = 2048   # increase for agents that generate long content (e.g. trip plans)
     followup_enrichment: bool = True  # set False for state-machine agents (trip planner) to avoid message merging
     use_client_history: bool = False  # set True to use localStorage history sent from frontend instead of server-side storage
+    directory_enabled: bool = False  # set True to enable Directory API access for this agent
+    directory_categories: list = field(default_factory=list)  # List of Farsi category names this agent can access (empty = all)
 
     def to_dict(self):
         return asdict(self)
@@ -90,6 +92,8 @@ def _discover_agents() -> dict[str, Agent]:
             max_output_tokens     = getattr(module, "max_output_tokens", 2048),
             followup_enrichment  = getattr(module, "followup_enrichment", True),
             use_client_history  = getattr(module, "use_client_history", False),
+            directory_enabled = getattr(module, "directory_enabled", False),
+            directory_categories = list(getattr(module, "directory_categories", [])),
         )
         registry[agent.slug] = agent
 
