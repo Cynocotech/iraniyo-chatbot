@@ -701,6 +701,19 @@ _BASE_DIR = Path(__file__).resolve().parent
 # Mount static files for fonts
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
 
+# Middleware to add proper headers for font files
+@app.middleware("http")
+async def add_font_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/fonts/"):
+        if request.url.path.endswith(".woff2"):
+            response.headers["Content-Type"] = "font/woff2"
+        elif request.url.path.endswith(".woff"):
+            response.headers["Content-Type"] = "font/woff"
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Cache-Control"] = "public, max-age=31536000"
+    return response
+
 def read_template(name: str) -> str:
     return (_BASE_DIR / "templates" / name).read_text(encoding="utf-8")
 
