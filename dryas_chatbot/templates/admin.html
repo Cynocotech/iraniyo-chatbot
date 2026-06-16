@@ -6,12 +6,22 @@
 <title>Iraniano – Admin Panel</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js" crossorigin="anonymous"></script>
 <style>
+  /* Yekan Farsi Font */
+  @font-face {
+    font-family: 'Yekan';
+    src: url('https://cdn.jsdelivr.net/gh/rastikerdar/yekan-font@v1.0.0/dist/Yekan.woff2') format('woff2'),
+         url('https://cdn.jsdelivr.net/gh/rastikerdar/yekan-font@v1.0.0/dist/Yekan.woff') format('woff');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
+
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{
     --bg:#0f1117;--surface:#1a1d27;--card:#22263a;
     --accent:#6c63ff;--accent2:#00c9a7;--warn:#f59e0b;--danger:#ef4444;
     --text:#e8eaf0;--muted:#8891a5;--border:#2e3349;
-    --font:'Segoe UI',system-ui,sans-serif;
+    --font:'Yekan','Segoe UI',system-ui,sans-serif;
   }
   body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh}
 
@@ -111,9 +121,11 @@
   <div class="nav">
     <a class="active" onclick="switchTab('monitor',this)">📊 Monitor</a>
     <a onclick="switchTab('agents',this)">🤖 Agents</a>
+    <a onclick="switchTab('directory',this)">🏢 Directory</a>
     <a onclick="switchTab('ads',this)">🎬 Ads</a>
     <a onclick="switchTab('config',this)">⚙️ Config</a>
     <a href="/" target="_blank">🏠 Selector ↗</a>
+    <a onclick="logout()" style="background:rgba(239,68,68,.15);border-color:var(--danger);color:var(--danger)">🚪 Logout</a>
   </div>
 </div>
 
@@ -182,6 +194,12 @@
             <option value="true">Enabled — uses Qdrant</option>
           </select>
         </div>
+        <div class="field"><label>Directory API Access 🏢</label>
+          <select id="ed-directory_enabled">
+            <option value="false">Disabled</option>
+            <option value="true">Enabled — can search businesses</option>
+          </select>
+        </div>
       </div>
 
       <div class="field" style="margin-bottom:16px">
@@ -193,12 +211,107 @@
       </div>
 
       <div class="field" style="margin-bottom:16px">
+        <label>Directory Categories <span style="color:var(--muted);font-size:10px;text-transform:none">(leave empty for all categories, or select specific ones)</span></label>
+        <div id="directory-categories-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:12px;min-height:60px">
+          <div style="color:var(--muted);font-size:12px;margin-bottom:8px" id="directory-categories-note">Loading categories...</div>
+          <div id="directory-categories-checkboxes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px"></div>
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:16px">
         <label>System Prompt</label>
         <textarea class="prompt-editor" id="ed-system_prompt"></textarea>
         <div class="prompt-meta"><span id="ed-charcount">0</span> characters</div>
       </div>
 
       <button class="btn btn-primary" onclick="saveAgent()">💾 Save Agent</button>
+    </div>
+  </div>
+
+  <!-- ── Directory ── -->
+  <div id="tab-directory" class="tab">
+    <div class="card">
+      <h2>🏢 Iranian Business Directory API</h2>
+      <p style="font-size:13px;color:var(--text);margin:0 0 20px;line-height:1.7">
+        Connect your chatbot to the <b>Iraniu Business Directory</b> to help users find Iranian businesses, restaurants,
+        hairdressers, shops, and services across the UK. Enable this for any agent with a simple toggle.
+      </p>
+
+      <div style="background:rgba(108,99,255,.1);border-left:4px solid var(--accent);padding:16px;border-radius:8px;margin:0 0 24px">
+        <div style="font-size:12px;color:var(--text);line-height:1.8">
+          <b style="color:var(--accent2)">✨ Features:</b><br>
+          • Search 100+ Iranian businesses in London, Manchester, Birmingham<br>
+          • Categories: رستوران, آرایشگاه, فروشگاه مواد غذایی, and more<br>
+          • Enable per-agent with category filtering<br>
+          • Full business details with Google Maps links
+        </div>
+      </div>
+
+      <h3 style="font-size:14px;color:var(--accent2);margin:0 0 12px">API Configuration</h3>
+      <div class="grid2" style="margin-bottom:20px">
+        <div class="field">
+          <label>Directory API URL</label>
+          <input id="DIR_API_URL" type="text" value="https://directory.iraniu.uk/chatbot/v1" placeholder="https://directory.iraniu.uk/chatbot/v1">
+        </div>
+        <div class="field">
+          <label>Directory API Key</label>
+          <input id="DIR_API_KEY" type="password" value="bd9a3134145e08761a65025ab204f27167bd91c1ec85276b995f17ad77734f52">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:24px">
+        <button class="btn btn-primary" onclick="saveDirectoryConfig()">💾 Save Configuration</button>
+        <button class="btn btn-muted" onclick="testDirectoryConnection()">🔍 Test Connection & Show Categories</button>
+      </div>
+
+      <div id="directory-test-result-main" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-top:16px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:14px;color:var(--accent2);margin:0 0 12px">📋 Available Business Categories</h3>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 16px">
+        These categories are fetched live from the Directory API. You can restrict agents to specific categories in the Agents tab.
+      </p>
+      <div id="all-categories-display" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px">
+        <div style="color:var(--muted);text-align:center;padding:20px;grid-column:1/-1">
+          Click "Test Connection" to load categories
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:14px;color:var(--accent2);margin:0 0 12px">🤖 Enable Directory for Agents</h3>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 16px">
+        To enable Directory API access for an agent:
+      </p>
+      <ol style="font-size:13px;color:var(--text);line-height:2;margin:0 0 16px 20px">
+        <li>Go to the <b>🤖 Agents</b> tab</li>
+        <li>Click <b>✏️ Edit</b> on any agent (e.g., Dr. Yas)</li>
+        <li>Find the <b>"Directory API Access 🏢"</b> dropdown</li>
+        <li>Select <b>"Enabled"</b></li>
+        <li>(Optional) Select specific categories to restrict access</li>
+        <li>Click <b>💾 Save Agent</b></li>
+      </ol>
+      <button class="btn btn-primary" onclick="switchTab('agents', document.querySelectorAll('.nav a')[1])">
+        Go to Agents Tab →
+      </button>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:14px;color:var(--accent2);margin:0 0 12px">📚 Documentation & API Endpoints</h3>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:12px;font-family:'Consolas','Fira Code',monospace;color:var(--text);line-height:1.8">
+        <b style="color:var(--accent2)">Public API Endpoints:</b><br>
+        <span style="color:var(--muted)">GET</span> /api/directory/categories<br>
+        <span style="color:var(--muted)">GET</span> /api/directory/businesses?category=X&city=Y<br>
+        <span style="color:var(--muted)">GET</span> /api/directory/businesses/{slug}<br><br>
+
+        <b style="color:var(--accent2)">Example Usage:</b><br>
+        <span style="color:var(--muted)"># Get all categories</span><br>
+        curl /api/directory/categories<br><br>
+
+        <span style="color:var(--muted)"># Search restaurants in London</span><br>
+        curl "/api/directory/businesses?category=رستوران&city=London"
+      </div>
     </div>
   </div>
 
@@ -299,6 +412,29 @@ let refreshTimer = null;
 let currentEditSlug = null;
 let currentChips = [];
 let isCreatingAgent = false;
+let allDirectoryCategories = [];  // Cache of all available categories
+let currentDirectoryCategories = [];  // Selected categories for current agent
+
+// ── Logout ────────────────────────────────────────────────
+async function logout() {
+  if (confirm('Are you sure you want to logout?')) {
+    try {
+      // Call logout API to clear server-side session
+      await fetch('/admin/logout', {method: 'POST'});
+
+      // Clear any stored session data
+      sessionStorage.clear();
+      localStorage.removeItem('adminSession');
+
+      // Redirect to login page
+      window.location.href = '/admin';
+    } catch(e) {
+      console.error('Logout error:', e);
+      // Still redirect even if API call fails
+      window.location.href = '/admin';
+    }
+  }
+}
 
 // ── Tab switching ─────────────────────────────────────────
 function switchTab(name, el) {
@@ -308,6 +444,7 @@ function switchTab(name, el) {
   el.classList.add('active');
   if (name === 'monitor') loadRuns();
   if (name === 'agents')  loadAgents();
+  if (name === 'directory') loadDirectoryTab();
   if (name === 'config')  loadConfig();
   if (name === 'ads')     loadAds();
 }
@@ -487,10 +624,11 @@ async function toggleAgent(slug, enabled) {
   } catch(e) { toast('Error: ' + e.message, 'error'); loadAgents(); }
 }
 
-function openCreateAgent() {
+async function openCreateAgent() {
   isCreatingAgent = true;
   currentEditSlug = null;
   currentChips = [];
+  currentDirectoryCategories = [];
   document.getElementById('editorTitle').innerHTML = `➕ Create New Agent`;
   document.getElementById('slugField').style.display = 'block';
   document.getElementById('btnResetAgent').style.display = 'none';
@@ -503,8 +641,11 @@ function openCreateAgent() {
   document.getElementById('ed-welcome_message').value = '';
   document.getElementById('ed-system_prompt').value = '';
   document.getElementById('ed-rag_enabled').value = 'false';
+  document.getElementById('ed-directory_enabled').value = 'false';
   updateEdCharCount();
   renderChipTags();
+  await loadDirectoryCategories();
+  renderDirectoryCategories();
   document.getElementById('agentEditor').style.display = 'block';
   document.getElementById('agentEditor').scrollIntoView({behavior:'smooth'});
 }
@@ -521,16 +662,20 @@ async function openEditor(slug) {
     document.getElementById('slugField').style.display = 'none';
     document.getElementById('btnResetAgent').style.display = 'inline-block';
     document.getElementById('btnDeleteAgent').style.display = 'inline-block';
-    
+
     document.getElementById('ed-name').value           = a.name;
     document.getElementById('ed-icon').value           = a.icon;
     document.getElementById('ed-description').value    = a.description;
     document.getElementById('ed-welcome_message').value = a.welcome_message;
     document.getElementById('ed-system_prompt').value  = a.system_prompt;
     document.getElementById('ed-rag_enabled').value    = a.rag_enabled ? 'true' : 'false';
+    document.getElementById('ed-directory_enabled').value = a.directory_enabled ? 'true' : 'false';
     updateEdCharCount();
     currentChips = [...(a.chips || [])];
     renderChipTags();
+    currentDirectoryCategories = [...(a.directory_categories || [])];
+    await loadDirectoryCategories();
+    renderDirectoryCategories();
     document.getElementById('agentEditor').style.display = 'block';
     document.getElementById('agentEditor').scrollIntoView({behavior:'smooth'});
   } catch(e) { toast('Error loading agent: ' + e.message, 'error'); }
@@ -552,6 +697,8 @@ async function saveAgent() {
       system_prompt:   document.getElementById('ed-system_prompt').value,
       chips:           currentChips,
       rag_enabled:     document.getElementById('ed-rag_enabled').value === 'true',
+      directory_enabled: document.getElementById('ed-directory_enabled').value === 'true',
+      directory_categories: currentDirectoryCategories,
     };
     try {
       const r = await fetch('/admin/agents', {
@@ -578,6 +725,8 @@ async function saveAgent() {
     system_prompt:   document.getElementById('ed-system_prompt').value,
     chips:           currentChips,
     rag_enabled:     document.getElementById('ed-rag_enabled').value === 'true',
+    directory_enabled: document.getElementById('ed-directory_enabled').value === 'true',
+    directory_categories: currentDirectoryCategories,
   };
   try {
     const r = await fetch(`/admin/agents/${currentEditSlug}`, {
@@ -638,6 +787,60 @@ function updateEdCharCount() {
   const len = (document.getElementById('ed-system_prompt').value || '').length;
   document.getElementById('ed-charcount').textContent = len.toLocaleString();
 }
+
+// ── Directory Categories ──────────────────────────────────
+async function loadDirectoryCategories() {
+  if (allDirectoryCategories.length > 0) return;  // Already loaded
+  try {
+    const r = await fetch('/api/directory/categories');
+    if (!r.ok) throw new Error('Failed to load categories');
+    const data = await r.json();
+    allDirectoryCategories = data.categories || [];
+  } catch(e) {
+    console.error('Directory categories load failed:', e);
+    allDirectoryCategories = [];
+  }
+}
+
+function renderDirectoryCategories() {
+  const wrap = document.getElementById('directory-categories-checkboxes');
+  const note = document.getElementById('directory-categories-note');
+
+  if (allDirectoryCategories.length === 0) {
+    note.textContent = 'Directory API not configured or unavailable';
+    wrap.innerHTML = '';
+    return;
+  }
+
+  const isEmpty = currentDirectoryCategories.length === 0;
+  note.innerHTML = isEmpty
+    ? '<span style="color:var(--accent2)">✓ All categories enabled (no filter)</span>'
+    : `<span style="color:var(--accent)">Restricted to ${currentDirectoryCategories.length} categor${currentDirectoryCategories.length > 1 ? 'ies' : 'y'}</span>`;
+
+  wrap.innerHTML = '';
+  allDirectoryCategories.forEach(cat => {
+    const isChecked = currentDirectoryCategories.includes(cat.name);
+    const cb = document.createElement('label');
+    cb.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--card);border:1px solid var(--border);border-radius:7px;cursor:pointer;font-size:12px;transition:border-color .2s';
+    cb.innerHTML = `
+      <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleDirectoryCategory('${esc(cat.name)}')" style="cursor:pointer">
+      <span dir="rtl" style="flex:1">${esc(cat.name)}</span>
+      <span style="color:var(--muted);font-size:10px">(${cat.business_count})</span>
+    `;
+    wrap.appendChild(cb);
+  });
+}
+
+function toggleDirectoryCategory(categoryName) {
+  const idx = currentDirectoryCategories.indexOf(categoryName);
+  if (idx >= 0) {
+    currentDirectoryCategories.splice(idx, 1);
+  } else {
+    currentDirectoryCategories.push(categoryName);
+  }
+  renderDirectoryCategories();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const ta = document.getElementById('ed-system_prompt');
   if (ta) ta.addEventListener('input', updateEdCharCount);
@@ -657,6 +860,7 @@ async function loadConfig() {
     }
   } catch(e) { toast('Failed: ' + e.message, 'error'); }
 }
+
 async function saveConfig() {
   const fields = ['OPENAI_API_KEY','GEMINI_API_KEY','QDRANT_API_KEY',
     'QDRANT_URL','QDRANT_COLLECTION','SCORE_THRESHOLD','TOP_K',
@@ -677,6 +881,127 @@ async function saveConfig() {
     if (!r.ok) { toast('Save failed','error'); return; }
     toast('✅ Config saved');
   } catch(e) { toast('Error: ' + e.message,'error'); }
+}
+
+// ── Directory Tab ─────────────────────────────────────────
+async function loadDirectoryTab() {
+  // Load current config values
+  try {
+    const r = await fetch('/admin/config');
+    if (r.ok) {
+      const c = await r.json();
+      document.getElementById('DIR_API_URL').value = c.DIRECTORY_API_URL || 'https://directory.iraniu.uk/chatbot/v1';
+      document.getElementById('DIR_API_KEY').value = c.DIRECTORY_API_KEY || '';
+    }
+  } catch(e) {
+    console.error('Failed to load directory config:', e);
+  }
+}
+
+async function saveDirectoryConfig() {
+  const url = document.getElementById('DIR_API_URL').value.trim();
+  const key = document.getElementById('DIR_API_KEY').value.trim();
+
+  if (!url || !key) {
+    toast('Please fill in both URL and API Key', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch('/admin/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        DIRECTORY_API_URL: url,
+        DIRECTORY_API_KEY: key
+      })
+    });
+
+    if (!r.ok) {
+      toast('Failed to save configuration', 'error');
+      return;
+    }
+
+    toast('✅ Directory API configuration saved!');
+
+    // Auto-test connection after save
+    setTimeout(() => testDirectoryConnection(), 500);
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function testDirectoryConnection() {
+  const resultDiv = document.getElementById('directory-test-result-main');
+  const categoriesDiv = document.getElementById('all-categories-display');
+
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<div style="color:var(--muted)">🔄 Testing connection...</div>';
+
+  try {
+    const r = await fetch('/api/directory/categories');
+
+    if (!r.ok) {
+      resultDiv.innerHTML = '<div style="color:var(--danger)">❌ <b>Connection Failed</b><br>Please check your API URL and Key in the configuration above.</div>';
+      categoriesDiv.innerHTML = '<div style="color:var(--danger);text-align:center;padding:20px;grid-column:1/-1">Connection failed</div>';
+      return;
+    }
+
+    const data = await r.json();
+    const cats = data.categories || [];
+
+    if (cats.length === 0) {
+      resultDiv.innerHTML = '<div style="color:var(--warn)">⚠️ <b>Connected</b> but no categories found.</div>';
+      return;
+    }
+
+    // Update allDirectoryCategories cache for agent editor
+    allDirectoryCategories = cats;
+
+    // Success message
+    resultDiv.innerHTML = `
+      <div style="color:var(--accent2);font-size:14px;margin-bottom:12px">
+        ✅ <b>Connected Successfully!</b><br>
+        <span style="font-size:12px;color:var(--muted)">Found ${cats.length} business categories with ${cats.reduce((a,c)=>a+c.business_count,0)} total businesses</span>
+      </div>
+    `;
+
+    // Display categories in grid
+    categoriesDiv.innerHTML = cats.map(c => `
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;transition:border-color .2s">
+        <div style="font-size:20px;margin-bottom:6px">${getCategoryEmoji(c.name)}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px" dir="rtl">${esc(c.name)}</div>
+        <div style="font-size:11px;color:var(--muted)">${c.business_count} business${c.business_count !== 1 ? 'es' : ''}</div>
+      </div>
+    `).join('');
+
+    toast('✅ Directory API connected!');
+
+  } catch(e) {
+    resultDiv.innerHTML = `<div style="color:var(--danger)">❌ <b>Error:</b> ${esc(e.message)}</div>`;
+    categoriesDiv.innerHTML = '<div style="color:var(--danger);text-align:center;padding:20px;grid-column:1/-1">Error loading categories</div>';
+  }
+}
+
+function getCategoryEmoji(categoryName) {
+  const emojiMap = {
+    'رستوران': '🍽️',
+    'آرایشگاه': '💇',
+    'فروشگاه مواد غذایی': '🛒',
+    'فروشگاه': '🛒',
+    'خدمات پزشکی': '⚕️',
+    'آژانس مسافرتی': '✈️',
+    'آژانس': '✈️',
+    'آموزشگاه': '🎓',
+    'حقوقی': '⚖️',
+    'املاک': '🏠',
+    'خدمات': '🔧',
+  };
+
+  for (const [key, emoji] of Object.entries(emojiMap)) {
+    if (categoryName.includes(key)) return emoji;
+  }
+  return '🏢';
 }
 
 // ── Ads ───────────────────────────────────────────────────
