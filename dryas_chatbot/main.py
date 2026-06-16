@@ -40,6 +40,7 @@ import asyncpg
 from openai import AsyncOpenAI
 from fastapi import FastAPI, HTTPException, Cookie, Response, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -696,6 +697,9 @@ app = FastAPI(
 app.add_middleware(SecurityMiddleware, max_request_size=1_000_000)  # 1MB limit
 
 _BASE_DIR = Path(__file__).resolve().parent
+
+# Mount static files for fonts
+app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
 
 def read_template(name: str) -> str:
     return (_BASE_DIR / "templates" / name).read_text(encoding="utf-8")
